@@ -6,7 +6,7 @@ information for filtering variants; for example **we will be skeptical of deleti
 do not have lower than average coverage** compared to regions with similar gc-content.
 
 
-It takes a **bam/cram**, a **VCF/BCF** of SV calls, and a **fasta** reference and it updates the FORMAT field for a
+`duphold` takes a **bam/cram**, a **VCF/BCF** of SV calls, and a **fasta** reference and it updates the FORMAT field for a
 single sample with:
 
 + **DHZ**: z-score for the variant depth *relative to the rest of the chromosome* the variant was found on.
@@ -16,6 +16,12 @@ single sample with:
 
 It also adds **GCF** to the INFO field indicating the fraction of G or C bases in the variant.
 
+## Install
+
+`duphold` is distributed as a binary [here] and requires libhts.so in standard locations or indicated with `LD_LIBRARY_PATH`.
+
+
+
 ## Usage
 
 ```
@@ -24,3 +30,7 @@ duphold --threads 4 --vcf $svvcf --bam $cram --fasta $fasta --output $output.bcf
 ```
 
 the threads are decompression threads so increasing up to about 4 works.
+
+## Acknowledgements
+
+I stole this idea from Ira Hall.
