@@ -56,6 +56,16 @@ proc gc_content(fai:Fai, chrom:string, step:int): seq[float32] =
         result[i] = v / step.float32
     return result
 
+proc get_or_empty(variant:Variant, field:string, input:var seq[float32]) =
+  ## if, for example we've already annotated a sample in the VCF with duphold
+  ## we dont want to overwite those values with nan so try to grab existing
+  ## values but otherwise make an empty array.
+  if variant.format.floats(field, input) != Status.OK:
+    if input.len != variant.vcf.n_samples:
+      input.set_len(variant.vcf.n_samples)
+    for i, f in input:
+      input[i] = cast[float32](bcf_float_missing)
+
 proc add_stats(variant:Variant, values:var seq[int32], sample_i: int, stats:Stats, gc_stats:var seq[Stats], fai:Fai) =
     var
       s = variant.start
@@ -71,29 +81,31 @@ proc add_stats(variant:Variant, values:var seq[int32], sample_i: int, stats:Stat
     for i in s..<e:
         local_stats.update(values[i], true)
 
-    var floats = newSeq[float32](variant.vcf.n_samples)
-    for i, f in floats:
-        floats[i] = cast[float32](bcf_float_missing)
-
     var tmp = @[gc]
     if variant.info.set("GCF", tmp) != Status.OK:
         quit "couldn't set GCF"
 
+    var floats = newSeq[float32](variant.vcf.n_samples)
+
+    get_or_empty(variant, "DHZ", floats)
     var z = (local_stats.m - stats.m) / sqrt(stats.S/stats.n.float64)
     floats[sample_i] = z.float32
     if variant.format.set("DHZ", floats) != Status.OK:
         quit "error setting DHZ in VCF"
 
+    get_or_empty(variant, "DHFC", floats)
     var fc = local_stats.m / stats.m
     floats[sample_i] = fc.float32
     if variant.format.set("DHFC", floats) != Status.OK:
         quit "error setting DHFC in VCF"
 
+    get_or_empty(variant, "DHBZ", floats)
     var gcz = (local_stats.m - gc_stat.m) / sqrt(gc_stat.S/gc_stat.n.float64)
     floats[sample_i] = gcz.float32
     if variant.format.set("DHBZ", floats) != Status.OK:
         quit "error setting DHBZ in VCF"
 
+    get_or_empty(variant, "DHBFC", floats)
     var gfc = local_stats.m / gc_stat.m
     floats[sample_i] = gfc.float32
     if variant.format.set("DHBFC", floats) != Status.OK:
