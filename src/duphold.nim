@@ -231,6 +231,7 @@ Options:
       quit "could not open bam file"
   if bam.idx == nil:
       quit "could not open bam index"
+  discard bam.set_option(FormatOption.CRAM_OPT_REQUIRED_FIELDS, 511)
 
   if not ovcf.write_header():
       quit "couldn't write vcf header"
