@@ -16,6 +16,16 @@ single sample with:
 
 It also adds **GCF** to the INFO field indicating the fraction of G or C bases in the variant.
 
+## Performance
+
+### Speed
+
+`duphold` runtime depends almost entirely on how long it takes to parse the BAM/CRAM files; it is relatively independent of the number of variants evaluated. It will also run quite a bit faster on CRAM than on BAM. It can be < 20 minutes of CPU time for a 30X CRAM.
+
+### Accuracy
+
+coming soon.
+
 ## Install
 
 `duphold` is distributed as a binary [here] and requires libhts.so in standard locations or indicated with `LD_LIBRARY_PATH`.
