@@ -11,6 +11,7 @@ type Stats = ref object
     n: int
     S: float64
     m: float64
+    t: int # total used for DHD
 
 proc update(s:var Stats, d:int, include_zero:bool) {.inline.} =
     ## streaming mean, sd
@@ -22,6 +23,20 @@ proc update(s:var Stats, d:int, include_zero:bool) {.inline.} =
     var df = d.float64
     s.m += (df - s.m) / s.n.float64
     s.S += (df - s.m) * (df - mprev)
+
+proc addm(s:var Stats, d:int) {.inline.} =
+  # update only the t and n.
+  # not that this method is never used on a struct where the update method is also used.
+  s.n += 1
+  s.t += d
+
+proc dropm(s:var Stats, d:int) {.inline.} =
+  # drp the t and the n.
+  s.n -= 1
+  s.t -= d
+
+proc mean(s:var Stats):float64 {.inline.} =
+    return s.t.float64 / s.n.float64
 
 proc idepthfun*(aln:Record, posns:var seq[mrange]) =
   ## depthfun is an example of a `fun` that can be sent to `genoiser`.
@@ -66,6 +81,65 @@ proc get_or_empty(variant:Variant, field:string, input:var seq[float32]) =
     for i, f in input:
       input[i] = cast[float32](bcf_float_missing)
 
+proc check_rapid_depth_change(start:int, stop:int, values: var seq[int32], w:int=6): int32 =
+    ## if start and end indicate the bounds of a deletion, we can often expect to see a rapid change in
+    ## depth at or near the break-point.
+    var
+      # could use CI for this, but larger CI == less confident anyway.
+      dist = min(80, max(20, 0.05 * (stop - start).float64).int)
+      # if we see too many changes then we can't trust the result.
+      changes = 0
+      d: float64
+      last_change = 0
+
+    for bi, bp in @[start, stop]:
+      var
+        cs = bp - dist
+        left = Stats()
+        right = Stats()
+
+      for i in (cs-w)..<(cs):
+          left.addm(values[i])
+      for i in cs..<(cs + w):
+          right.addm(values[i])
+
+      for k in cs..(bp + dist + w):
+        if k - last_change > w:
+            var
+                lm = left.mean
+                rm = right.mean
+            if lm < 8 and rm < 8: continue
+            if bi == 0:
+              d = rm / lm
+            else:
+              d = lm / rm
+            #if (k > start - 10 and k < start + 10) or (k > stop - 10 and k < stop + 10):
+            #    echo k, " ",d
+
+            # in addition to normal change (1.25), we have special-case here for when we're very close to either break-point.
+            # the changes <= bi makes sure we dont mess up an existing, better change that was
+            # already found.
+            if d > 1.25 or (changes <= bi and d > 1.15 and (((k - start).abs < 2) or (k - stop).abs < 2)):
+              changes += 1
+              #echo "DUP position:", k, " fc:", d, " changes:", changes, " left:", left.mean, " right:", right.mean
+              last_change = k
+              result += 1
+            if d < 0.7 or (changes <= bi and d < 0.8 and (((k - start).abs < 2) or (k - stop).abs < 2)):
+              changes += 1
+              last_change = k
+              #echo "DEL position:", k, " fc:", d, " changes:", changes, " left:", left.mean, " right:", right.mean
+              result -= 1
+        # now update left and right
+        left.dropm(values[k-w])
+        left.addm(values[k])
+
+        right.dropm(values[k])
+        right.addm(values[k + w])
+
+    #echo "FINISHED:", "changes:", changes, "result:", result
+    if changes > 2:
+        result = 0
+
 proc add_stats(variant:Variant, values:var seq[int32], sample_i: int, stats:Stats, gc_stats:var seq[Stats], fai:Fai) =
     var
       s = variant.start
@@ -78,7 +152,7 @@ proc add_stats(variant:Variant, values:var seq[int32], sample_i: int, stats:Stat
     #echo gci, " ", gc, " ", gc_stat.n, " ", gc_stat.S
 
     var local_stats = Stats()
-    for i in s..<e:
+    for i in (s+1)..e:
         local_stats.update(values[i], true)
 
     var tmp = @[gc]
@@ -87,11 +161,11 @@ proc add_stats(variant:Variant, values:var seq[int32], sample_i: int, stats:Stat
 
     var floats = newSeq[float32](variant.vcf.n_samples)
 
-    get_or_empty(variant, "DHZ", floats)
-    var z = (local_stats.m - stats.m) / sqrt(stats.S/stats.n.float64)
-    floats[sample_i] = z.float32
-    if variant.format.set("DHZ", floats) != Status.OK:
-        quit "error setting DHZ in VCF"
+    #get_or_empty(variant, "DHZ", floats)
+    #var z = (local_stats.m - stats.m) / sqrt(stats.S/stats.n.float64)
+    #floats[sample_i] = z.float32
+    #if variant.format.set("DHZ", floats) != Status.OK:
+    #    quit "error setting DHZ in VCF"
 
     get_or_empty(variant, "DHFC", floats)
     var fc = local_stats.m / stats.m
@@ -110,6 +184,11 @@ proc add_stats(variant:Variant, values:var seq[int32], sample_i: int, stats:Stat
     floats[sample_i] = gfc.float32
     if variant.format.set("DHBFC", floats) != Status.OK:
         quit "error setting DHBFC in VCF"
+
+    var dhd = @[check_rapid_depth_change(s, e, values)]
+    if variant.format.set("DHD", dhd) != Status.OK:
+        quit "error setting DHD in VCF"
+
 
 iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Variant =
   var depths : Fun#(values:new_seq[int32](), f:idepthfun)
@@ -206,17 +285,17 @@ Options:
   if not open(ovcf, $args["--output"], mode="w"):
     quit "unable to open output vcf"
 
-
   if vcf.header.add_info("GCF", "1", "Float", "GC-content fraction for the variant region betwee 0 and 1.") != Status.OK:
       quit "unable to add to header"
-
-  if vcf.header.add_format("DHZ", "1", "Float", "duphold z-score for depth") != Status.OK:
-      quit "unable to add to header"
+  #if vcf.header.add_format("DHZ", "1", "Float", "duphold z-score for depth") != Status.OK:
+  #    quit "unable to add to header"
   if vcf.header.add_format("DHFC", "1", "Float", "duphold depth fold-change") != Status.OK:
       quit "unable to add to header"
   if vcf.header.add_format("DHBZ", "1", "Float", "duphold z-score for depth compared to bins with matching GC") != Status.OK:
       quit "unable to add to header"
   if vcf.header.add_format("DHBFC", "1", "Float", "duphold depth fold-change compared to bins with matching GC") != Status.OK:
+      quit "unable to add to header"
+  if vcf.header.add_format("DHD", "1", "Integer", "duphold rapid change in depth at one of the break-points (1 for higher. 0 for no or conflicting changes. -1 for drop, 2 for both break points)") != Status.OK:
       quit "unable to add to header"
 
   ovcf.header = vcf.header
