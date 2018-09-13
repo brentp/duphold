@@ -24,18 +24,18 @@ proc update(s:var Stats, d:int, include_zero:bool) {.inline.} =
     s.m += (df - s.m) / s.n.float64
     s.S += (df - s.m) * (df - mprev)
 
-proc addm(s:var Stats, d:int) {.inline.} =
+proc addm(s:Stats, d:int) {.inline.} =
   # update only the t and n.
   # not that this method is never used on a struct where the update method is also used.
   s.n += 1
   s.t += d
 
-proc dropm(s:var Stats, d:int) {.inline.} =
+proc dropm(s:Stats, d:int) {.inline.} =
   # drp the t and the n.
   s.n -= 1
   s.t -= d
 
-proc mean(s:var Stats):float64 {.inline.} =
+proc mean(s:Stats):float64 {.inline.} =
     return s.t.float64 / s.n.float64
 
 proc idepthfun*(aln:Record, posns:var seq[mrange]) =
@@ -81,12 +81,12 @@ proc get_or_empty(variant:Variant, field:string, input:var seq[float32]) =
     for i, f in input:
       input[i] = cast[float32](bcf_float_missing)
 
-proc check_rapid_depth_change(start:int, stop:int, values: var seq[int32], w:int=6): int32 =
+proc check_rapid_depth_change(start:int, stop:int, values: var seq[int32], w:int=7): int32 =
     ## if start and end indicate the bounds of a deletion, we can often expect to see a rapid change in
     ## depth at or near the break-point.
     var
       # could use CI for this, but larger CI == less confident anyway.
-      dist = min(80, max(20, 0.05 * (stop - start).float64).int)
+      dist = min(80, max(25, 0.05 * (stop - start).float64).int)
       # if we see too many changes then we can't trust the result.
       changes = 0
       d: float64
@@ -94,6 +94,7 @@ proc check_rapid_depth_change(start:int, stop:int, values: var seq[int32], w:int
 
     for bi, bp in @[start, stop]:
       var
+        close_changes = 0
         cs = bp - dist
         left = Stats()
         right = Stats()
@@ -104,11 +105,18 @@ proc check_rapid_depth_change(start:int, stop:int, values: var seq[int32], w:int
           right.addm(values[i])
 
       for k in cs..(bp + dist + w):
-        if k - last_change > w:
+        if (k - last_change) > w:
             var
                 lm = left.mean
                 rm = right.mean
-            if lm < 8 and rm < 8: continue
+            if lm < 8 and rm < 8:
+              left.dropm(values[k-w])
+              left.addm(values[k])
+
+              right.dropm(values[k])
+              right.addm(values[k + w])
+              continue
+
             if bi == 0:
               d = rm / lm
             else:
@@ -119,12 +127,19 @@ proc check_rapid_depth_change(start:int, stop:int, values: var seq[int32], w:int
             # in addition to normal change (1.25), we have special-case here for when we're very close to either break-point.
             # the changes <= bi makes sure we dont mess up an existing, better change that was
             # already found.
-            if d > 1.25 or (changes <= bi and d > 1.15 and (((k - start).abs < 2) or (k - stop).abs < 2)):
+            var close = (((k - start).abs <= 3) or (k - stop).abs <= 3)
+            if close_changes == bi and d > 1.25 or (changes <= bi and d > 1.17 and close):
+              # if we are right near the break-point and we already found a conflicting change
+              # but this one is very good, we over-ride
+              if close and close_changes == bi and result < 0 and d > 1.25:
+                  changes = bi
+                  close_changes = bi + 1
+                  result = 0
               changes += 1
-              #echo "DUP position:", k, " fc:", d, " changes:", changes, " left:", left.mean, " right:", right.mean
+              #echo "DUP position:", k, " fc:", d, " changes:", changes, " left:", left.mean, " right:", right.mean , "close:", close
               last_change = k
               result += 1
-            if d < 0.7 or (changes <= bi and d < 0.8 and (((k - start).abs < 2) or (k - stop).abs < 2)):
+            if d < 0.7 or (changes <= bi and d < 0.8 and close):
               changes += 1
               last_change = k
               #echo "DEL position:", k, " fc:", d, " changes:", changes, " left:", left.mean, " right:", right.mean
