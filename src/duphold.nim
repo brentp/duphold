@@ -257,7 +257,7 @@ Options:
   -b --bam <path>           path to indexed BAM/CRAM
   -f --fasta <path>         indexed fasta reference.
   -t --threads <int>        number of decompression threads. [default: 4]
-  -s --sample <string>      optional VCF sample to annotate
+  -s --sample <string>      optional VCF sample name or index to annotate
   -o --output <string>      output VCF/BCF (default is VCF to stdout) [default: -]
   -h --help                 show help
   """)
@@ -303,7 +303,10 @@ Options:
   if $args["--sample"] != "nil":
       sample_i = vcf.samples.find($args["--sample"])
       if sample_i < 0:
-          quit "sample:" & $args["--sample"] & "not found in vcf"
+          try:
+              sample_i = parseInt($args["--sample"])
+          except:
+              quit "sample:" & $args["--sample"] & "not found in vcf"
 
   open(bam, $args["--bam"], index=true, threads=parseInt($args["--threads"]), fai=($args["--fasta"]))
   if bam == nil:
