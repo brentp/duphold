@@ -7,7 +7,7 @@ import genoiser
 
 const STEP = 200
 
-type Stats = ref object
+type Stats* = ref object
     n: int
     S: float64
     m: float64
@@ -24,18 +24,18 @@ proc update(s:var Stats, d:int, include_zero:bool) {.inline.} =
     s.m += (df - s.m) / s.n.float64
     s.S += (df - s.m) * (df - mprev)
 
-proc addm(s:Stats, d:int) {.inline.} =
+proc addm*(s:Stats, d:int) {.inline.} =
   # update only the t and n.
   # not that this method is never used on a struct where the update method is also used.
   s.n += 1
   s.t += d
 
-proc dropm(s:Stats, d:int) {.inline.} =
+proc dropm*(s:Stats, d:int) {.inline.} =
   # drp the t and the n.
   s.n -= 1
   s.t -= d
 
-proc mean(s:Stats):float64 {.inline.} =
+proc mean*(s:Stats):float64 {.inline.} =
     return s.t.float64 / s.n.float64
 
 proc idepthfun*(aln:Record, posns:var seq[mrange]) =
@@ -71,15 +71,26 @@ proc gc_content(fai:Fai, chrom:string, step:int): seq[float32] =
         result[i] = v / step.float32
     return result
 
-proc get_or_empty(variant:Variant, field:string, input:var seq[float32]) =
+proc get_or_empty[T](variant:Variant, field:string, input:var seq[T]) =
   ## if, for example we've already annotated a sample in the VCF with duphold
   ## we dont want to overwite those values with nan so try to grab existing
   ## values but otherwise make an empty array.
-  if variant.format.floats(field, input) != Status.OK:
-    if input.len != variant.vcf.n_samples:
-      input.set_len(variant.vcf.n_samples)
-    for i, f in input:
-      input[i] = cast[float32](bcf_float_missing)
+  when T is float32:
+    if variant.format.floats(field, input) == Status.OK:
+      return
+  elif T is int32:
+    if variant.format.ints(field, input) == Status.OK:
+      return
+
+  if input.len != variant.vcf.n_samples:
+    input.set_len(variant.vcf.n_samples)
+  for i, f in input:
+    when T is float32:
+        input[i] = cast[T](bcf_float_missing)
+    elif T is int32:
+        input[i] = int32.low
+    else:
+        quit "unknown type in get_or_empty"
 
 proc check_rapid_depth_change(start:int, stop:int, values: var seq[int32], w:int=7): int32 =
     ## if start and end indicate the bounds of a deletion, we can often expect to see a rapid change in
@@ -200,8 +211,10 @@ proc add_stats(variant:Variant, values:var seq[int32], sample_i: int, stats:Stat
     if variant.format.set("DHBFC", floats) != Status.OK:
         quit "error setting DHBFC in VCF"
 
-    var dhd = @[check_rapid_depth_change(s, e, values)]
-    if variant.format.set("DHD", dhd) != Status.OK:
+    var ints = newSeq[int32](variant.vcf.n_samples)
+    get_or_empty(variant, "DHD", ints)
+    ints[sample_i] = check_rapid_depth_change(s, e, values)
+    if variant.format.set("DHD", ints) != Status.OK:
         quit "error setting DHD in VCF"
 
 
@@ -216,15 +229,19 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
     stats:Stats
     gc_stats:seq[Stats]
     gc_count:seq[float32]
+    last_stop = 0
 
   for variant in vcf:
       if variant.CHROM == last_chrom:
           variant.add_stats(depths.values, sample_i, stats, gc_stats, fai)
+
+          last_stop = variant.stop
           yield variant
           continue
 
       target = nil
       last_chrom = $variant.CHROM
+      last_stop = 0
       stats = Stats()
       gc_stats = newSeq[Stats](20)
       for i, g in gc_stats:
