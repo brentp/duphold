@@ -187,12 +187,6 @@ proc add_stats(variant:Variant, values:var seq[int32], sample_i: int, stats:Stat
 
     var floats = newSeq[float32](variant.vcf.n_samples)
 
-    #get_or_empty(variant, "DHZ", floats)
-    #var z = (local_stats.m - stats.m) / sqrt(stats.S/stats.n.float64)
-    #floats[sample_i] = z.float32
-    #if variant.format.set("DHZ", floats) != Status.OK:
-    #    quit "error setting DHZ in VCF"
-
     get_or_empty(variant, "DHFC", floats)
     var fc = local_stats.m / stats.m
     floats[sample_i] = fc.float32
@@ -278,6 +272,15 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       variant.add_stats(depths.values, sample_i, stats, gc_stats, fai)
       yield variant
 
+proc sample_name(b:Bam): string =
+    for line in ($b.hdr).split("\n"):
+        if not line.startswith("@RG"): continue
+        var tmp = line.split("SM:")[1].split("\t")[0].strip()
+        if result != "" and tmp != result:
+            raise newException(ValueError, "found multiple samples in bam:" & result & "," & tmp)
+        result = tmp
+
+
 proc main(argv: seq[string]) =
 
   let doc = format("""
@@ -289,7 +292,6 @@ Options:
   -b --bam <path>           path to indexed BAM/CRAM
   -f --fasta <path>         indexed fasta reference.
   -t --threads <int>        number of decompression threads. [default: 4]
-  -s --sample <string>      optional VCF sample name or index to annotate
   -o --output <string>      output VCF/BCF (default is VCF to stdout) [default: -]
   -h --help                 show help
   """)
@@ -332,20 +334,15 @@ Options:
 
   ovcf.header = vcf.header
 
-  if $args["--sample"] != "nil":
-      sample_i = vcf.samples.find($args["--sample"])
-      if sample_i < 0:
-          try:
-              sample_i = parseInt($args["--sample"])
-          except:
-              quit "sample:" & $args["--sample"] & "not found in vcf"
-
   open(bam, $args["--bam"], index=true, threads=parseInt($args["--threads"]), fai=($args["--fasta"]))
   if bam == nil:
       quit "could not open bam file"
   if bam.idx == nil:
       quit "could not open bam index"
   discard bam.set_option(FormatOption.CRAM_OPT_REQUIRED_FIELDS, 511)
+  sample_i = vcf.samples.find(bam.sample_name)
+  if sample_i == -1:
+      quit "couldn't find sample:" & bam.sample_name & " in vcf which had:" & join(vcf.samples, ",")
 
   if not ovcf.write_header():
       quit "couldn't write vcf header"

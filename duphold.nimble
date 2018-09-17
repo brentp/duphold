@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.0.2"
+version       = "0.0.3"
 author        = "Brent Pedersen"
 description   = "find depth support for DUP/DEL/CNV calls that use PE/SR"
 license       = "MIT"
@@ -8,7 +8,7 @@ license       = "MIT"
 
 # Dependencies
 
-requires "docopt#0abba63", "genoiser >= 0.2.1"
+requires "docopt#0abba63", "genoiser >= 0.2.1", "hts >= 0.2.4"
 srcDir = "src"
 
 bin = @["duphold"]
