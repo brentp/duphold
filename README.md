@@ -43,4 +43,4 @@ the threads are decompression threads so increasing up to about 4 works.
 
 ## Acknowledgements
 
-I stole this idea from Ira Hall.
+I stole the idea of annotating SVs with depth-change from Ira Hall.
