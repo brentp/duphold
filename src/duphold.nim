@@ -166,7 +166,7 @@ proc check_rapid_depth_change[T](start:int, stop:int, values: var seq[T], w:int=
     if changes > 2:
         result = 0
 
-proc add_stats[T](variant:Variant, values:var seq[T], sample_i: int, stats:Stats, gc_stats:var seq[Stats], fai:Fai) =
+proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Stats, gc_stats:var seq[Stats], fai:Fai) =
     var
       s = variant.start
       e = variant.stop
@@ -211,6 +211,23 @@ proc add_stats[T](variant:Variant, values:var seq[T], sample_i: int, stats:Stats
     if variant.format.set("DHD", ints) != Status.OK:
         quit "error setting DHD in VCF"
 
+proc fill_stats*[T](depths: var seq[T], stats:var Stats, gc_stats:var seq[Stats], gc_count:var seq[float32], step:int, target_length:int) =
+  for v in depths:
+    stats.update(v, false)
+  # for each window of length step, gc_count holds the proportion of bases that were G or C
+
+
+  # now, for each window, we determine the gc bin (multiply by 20 to get the i) and update the
+  # stats for that bin.
+  var wi = -1
+  for w0 in countup(0, target_length - step, step):
+      wi += 1
+      if gc_count[wi] < 0: continue
+      var gci = (19 * gc_count[wi]).int
+      # get the correct stat for the gc in this window and update it.
+      for i in w0..<(w0 + step):
+          gc_stats[gci].update(depths[i], false)
+
 
 iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Variant =
   var depths : Fun
@@ -223,19 +240,16 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
     stats:Stats
     gc_stats:seq[Stats]
     gc_count:seq[float32]
-    last_stop = 0
 
   for variant in vcf:
       if variant.CHROM == last_chrom:
-          variant.add_stats(depths.values, sample_i, stats, gc_stats, fai)
+          variant.duphold(depths.values, sample_i, stats, gc_stats, fai)
 
-          last_stop = variant.stop
           yield variant
           continue
 
       target = nil
       last_chrom = $variant.CHROM
-      last_stop = 0
       stats = Stats()
       gc_stats = newSeq[Stats](20)
       for i, g in gc_stats:
@@ -252,24 +266,11 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       target = targets[i]
       depths = Fun(values: new_seq[int32](target.length.int+1), f:idepthfun)
       discard genoiser(bam, @[depths], target.name, 0, target.length.int)
-      for v in depths.values:
-          stats.update(v, false)
 
-      # for each window of length step, gc_count holds the proportion of bases that were G or C
       gc_count = fai.gc_content(last_chrom, step)
+      depths.values.fill_stats(stats, gc_stats, gc_count, step, target.length.int)
 
-      # now, for each window, we determine the gc bin (multiply by 20 to get the i) and update the
-      # stats for that bin.
-      var wi = -1
-      for w0 in countup(0, target.length.int - step, step):
-          wi += 1
-          if gc_count[wi] < 0: continue
-          var gci = (19 * gc_count[wi]).int
-          # get the correct stat for the gc in this window and update it.
-          for i in w0..<(w0 + step):
-              gc_stats[gci].update(depths.values[i], false)
-
-      variant.add_stats(depths.values, sample_i, stats, gc_stats, fai)
+      variant.duphold(depths.values, sample_i, stats, gc_stats, fai)
       yield variant
 
 proc sample_name(b:Bam): string =
