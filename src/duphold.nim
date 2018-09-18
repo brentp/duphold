@@ -8,12 +8,12 @@ import genoiser
 const STEP = 200
 
 type Stats* = ref object
-    n: int
-    S: float64
-    m: float64
-    t: int # total used for DHD
+    n*: int
+    S*: float64
+    m*: float64
+    t*: int # total used for DHD
 
-proc update(s:var Stats, d:int, include_zero:bool) {.inline.} =
+proc update*(s:var Stats, d:int, include_zero:bool) {.inline.} =
     ## streaming mean, sd
     ## https://dsp.stackexchange.com/questions/811/determining-the-mean-and-standard-deviation-in-real-time
     if (not include_zero) and d == 0:
@@ -92,7 +92,7 @@ proc get_or_empty[T](variant:Variant, field:string, input:var seq[T]) =
     else:
         quit "unknown type in get_or_empty"
 
-proc check_rapid_depth_change(start:int, stop:int, values: var seq[int32], w:int=7): int32 =
+proc check_rapid_depth_change[T](start:int, stop:int, values: var seq[T], w:int=7): int32 =
     ## if start and end indicate the bounds of a deletion, we can often expect to see a rapid change in
     ## depth at or near the break-point.
     var
@@ -166,7 +166,7 @@ proc check_rapid_depth_change(start:int, stop:int, values: var seq[int32], w:int
     if changes > 2:
         result = 0
 
-proc add_stats(variant:Variant, values:var seq[int32], sample_i: int, stats:Stats, gc_stats:var seq[Stats], fai:Fai) =
+proc add_stats[T](variant:Variant, values:var seq[T], sample_i: int, stats:Stats, gc_stats:var seq[Stats], fai:Fai) =
     var
       s = variant.start
       e = variant.stop
@@ -213,7 +213,7 @@ proc add_stats(variant:Variant, values:var seq[int32], sample_i: int, stats:Stat
 
 
 iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Variant =
-  var depths : Fun#(values:new_seq[int32](), f:idepthfun)
+  var depths : Fun
   var
       targets = bam.hdr.targets
       target: Target
@@ -261,7 +261,7 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       # now, for each window, we determine the gc bin (multiply by 20 to get the i) and update the
       # stats for that bin.
       var wi = -1
-      for w0 in countup(0, target.length.int, step):
+      for w0 in countup(0, target.length.int - step, step):
           wi += 1
           if gc_count[wi] < 0: continue
           var gci = (19 * gc_count[wi]).int
