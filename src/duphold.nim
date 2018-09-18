@@ -230,7 +230,7 @@ proc fill_stats*[T](depths: var seq[T], stats:var Stats, gc_stats:var seq[Stats]
 
 
 iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Variant =
-  var depths : Fun
+  var depths : Fun[int16]
   var
       targets = bam.hdr.targets
       target: Target
@@ -264,8 +264,8 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
           continue
 
       target = targets[i]
-      depths = Fun(values: new_seq[int32](target.length.int+1), f:idepthfun)
-      discard genoiser(bam, @[depths], target.name, 0, target.length.int)
+      depths = Fun[int16](values: new_seq[int16](target.length.int+1), f:idepthfun)
+      discard genoiser[int16](bam, @[depths], target.name, 0, target.length.int)
 
       gc_count = fai.gc_content(last_chrom, step)
       depths.values.fill_stats(stats, gc_stats, gc_count, step, target.length.int)

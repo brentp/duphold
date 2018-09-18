@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.0.3"
+version       = "0.0.4"
 author        = "Brent Pedersen"
 description   = "find depth support for DUP/DEL/CNV calls that use PE/SR"
 license       = "MIT"
