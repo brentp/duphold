@@ -24,6 +24,15 @@ proc update*(s:var Stats, d:int, include_zero:bool) {.inline.} =
     s.m += (df - s.m) / s.n.float64
     s.S += (df - s.m) * (df - mprev)
 
+proc clear*(s:var Stats) =
+    s.n = 0
+    s.S = 0
+    s.m = 0
+    s.t = 0
+
+proc stddev*(s:Stats): float64 {.inline.} =
+   sqrt(s.S/s.n.float64)
+
 proc addm*(s:Stats, d:int) {.inline.} =
   # update only the t and n.
   # not that this method is never used on a struct where the update method is also used.
@@ -58,7 +67,7 @@ proc count_gc(s:string): float32 =
             result += 1
     result /= s.len.float32
 
-proc gc_content(fai:Fai, chrom:string, step:int): seq[float32] =
+proc gc_content*(fai:Fai, chrom:string, step:int): seq[float32] =
     var s = fai.get(chrom).toUpperAscii()
     result = newSeq[float32]((s.len/step+1).int)
 
@@ -166,7 +175,8 @@ proc check_rapid_depth_change[T](start:int, stop:int, values: var seq[T], w:int=
     if changes > 2:
         result = 0
 
-proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Stats, gc_stats:var seq[Stats], fai:Fai) =
+proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Stats, gc_stats:var seq[Stats], fai:Fai): float64 =
+    ## sets FORMAT fields for sample i in the variant and returns the DHBFC value
     var
       s = variant.start
       e = variant.stop
@@ -201,6 +211,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var St
 
     get_or_empty(variant, "DHBFC", floats)
     var gfc = local_stats.m / gc_stat.m
+    result = gfc
     floats[sample_i] = gfc.float32
     if variant.format.set("DHBFC", floats) != Status.OK:
         quit "error setting DHBFC in VCF"
@@ -212,8 +223,16 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var St
         quit "error setting DHD in VCF"
 
 proc fill_stats*[T](depths: var seq[T], stats:var Stats, gc_stats:var seq[Stats], gc_count:var seq[float32], step:int, target_length:int) =
+  stats.clear()
   for v in depths:
     stats.update(v, false)
+
+  var dmax = int(stats.m + 4 * sqrt(stats.m))
+  stats.clear()
+  for v in depths:
+    if v < dmax:
+      stats.update(v, false)
+
   # for each window of length step, gc_count holds the proportion of bases that were G or C
 
 
@@ -243,7 +262,7 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
 
   for variant in vcf:
       if variant.CHROM == last_chrom:
-          variant.duphold(depths.values, sample_i, stats, gc_stats, fai)
+          discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai)
 
           yield variant
           continue
@@ -270,7 +289,7 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       gc_count = fai.gc_content(last_chrom, step)
       depths.values.fill_stats(stats, gc_stats, gc_count, step, target.length.int)
 
-      variant.duphold(depths.values, sample_i, stats, gc_stats, fai)
+      discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai)
       yield variant
 
 proc sample_name(b:Bam): string =
@@ -294,6 +313,7 @@ Options:
   -f --fasta <path>         indexed fasta reference.
   -t --threads <int>        number of decompression threads. [default: 4]
   -o --output <string>      output VCF/BCF (default is VCF to stdout) [default: -]
+  -d --drop                 drop all samples from a multi-sample --vcf *except* the sample in --bam. useful for parallelization by sample followed by merge.
   -h --help                 show help
   """)
 
@@ -333,7 +353,6 @@ Options:
   if vcf.header.add_format("DHD", "1", "Integer", "duphold rapid change in depth at one of the break-points (1 for higher. 0 for no or conflicting changes. -1 for drop, 2 for both break points)") != Status.OK:
       quit "unable to add to header"
 
-  ovcf.header = vcf.header
 
   open(bam, $args["--bam"], index=true, threads=parseInt($args["--threads"]), fai=($args["--fasta"]))
   if bam == nil:
@@ -344,6 +363,10 @@ Options:
   sample_i = vcf.samples.find(bam.sample_name)
   if sample_i == -1:
       quit "couldn't find sample:" & bam.sample_name & " in vcf which had:" & join(vcf.samples, ",")
+  if args["--drop"]:
+    vcf.set_samples(@[bam.sample_name])
+    sample_i = 0
+  ovcf.header = vcf.header
 
   if not ovcf.write_header():
       quit "couldn't write vcf header"
