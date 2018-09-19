@@ -1,5 +1,5 @@
-v0.0.4 (dev)
-============
+v0.0.4
+======
 + small bug-fixes
 + duphold now uses about half as much memory
 + add -d/--drop flag which will drop all samples from a VCF except the
