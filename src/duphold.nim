@@ -4,8 +4,10 @@ import os
 import math
 import docopt
 import genoiser
+import ./dupholdpkg/version
 
 const STEP = 200
+
 
 type Stats* = ref object
     n*: int
@@ -300,6 +302,7 @@ proc sample_name(b:Bam): string =
 proc main(argv: seq[string]) =
 
   let doc = format("""
+  version: $version
 
   Usage: duphold [options]
 
@@ -311,7 +314,7 @@ Options:
   -o --output <string>      output VCF/BCF (default is VCF to stdout) [default: -]
   -d --drop                 drop all samples from a multi-sample --vcf *except* the sample in --bam. useful for parallelization by sample followed by merge.
   -h --help                 show help
-  """)
+  """, @["version", dupholdVersion])
 
   let args = docopt(doc, argv=argv)
   var

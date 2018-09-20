@@ -1,6 +1,16 @@
+import ospaths
+template thisModuleFile: string = instantiationInfo(fullPaths = true).filename
+
+when fileExists(thisModuleFile.parentDir / "src/duphold.nim"):
+  # In the git repository the Nimble sources are in a ``src`` directory.
+  import src/dupholdpkg/version as _
+else:
+  # When the package is installed, the ``src`` directory disappears.
+  import dupholdpkg/version as _
+
 # Package
 
-version       = "0.0.5"
+version       = dupholdVersion
 author        = "Brent Pedersen"
 description   = "find depth support for DUP/DEL/CNV calls that use PE/SR"
 license       = "MIT"
@@ -10,6 +20,7 @@ license       = "MIT"
 
 requires "docopt#0abba63", "genoiser >= 0.2.1", "hts >= 0.2.5"
 srcDir = "src"
+installExt = @["nim"]
 
 bin = @["duphold"]
 
