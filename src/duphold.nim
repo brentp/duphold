@@ -84,11 +84,7 @@ proc get_or_empty[T](variant:Variant, field:string, input:var seq[T]) =
   ## if, for example we've already annotated a sample in the VCF with duphold
   ## we dont want to overwite those values with nan so try to grab existing
   ## values but otherwise make an empty array.
-  when T is float32:
-    if variant.format.floats(field, input) == Status.OK:
-      return
-  elif T is int32:
-    if variant.format.ints(field, input) == Status.OK:
+  if variant.format.get(field, input) == Status.OK:
       return
 
   if input.len != variant.vcf.n_samples:
