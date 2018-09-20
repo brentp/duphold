@@ -8,7 +8,7 @@ license       = "MIT"
 
 # Dependencies
 
-requires "docopt#0abba63", "genoiser >= 0.2.1", "hts >= 0.2.4"
+requires "docopt#0abba63", "genoiser >= 0.2.1", "hts >= 0.2.5"
 srcDir = "src"
 
 bin = @["duphold"]
