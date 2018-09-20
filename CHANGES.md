@@ -1,3 +1,7 @@
+v0.0.5
+======
++ fix bug that occurred with SVs near either end of chromosome (brentp/duphold#2). thanks Brad for reporting and providing a test-case.
+
 v0.0.4
 ======
 + small bug-fixes

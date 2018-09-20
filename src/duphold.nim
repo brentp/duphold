@@ -101,7 +101,7 @@ proc get_or_empty[T](variant:Variant, field:string, input:var seq[T]) =
     else:
         quit "unknown type in get_or_empty"
 
-proc check_rapid_depth_change[T](start:int, stop:int, values: var seq[T], w:int=7): int32 =
+proc check_rapid_depth_change*[T](start:int, stop:int, values: var seq[T], w:int=7): int32 =
     ## if start and end indicate the bounds of a deletion, we can often expect to see a rapid change in
     ## depth at or near the break-point.
     var
@@ -115,7 +115,7 @@ proc check_rapid_depth_change[T](start:int, stop:int, values: var seq[T], w:int=
     for bi, bp in @[start, stop]:
       var
         close_changes = 0
-        cs = bp - dist
+        cs = max(w, bp - dist - w)
         left = Stats()
         right = Stats()
 
@@ -124,7 +124,7 @@ proc check_rapid_depth_change[T](start:int, stop:int, values: var seq[T], w:int=
       for i in cs..<(cs + w):
           right.addm(values[i])
 
-      for k in cs..(bp + dist + w):
+      for k in cs..min(bp + dist + w, values.len - w - 1):
         if (k - last_change) > w:
             var
                 lm = left.mean
