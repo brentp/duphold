@@ -173,11 +173,42 @@ proc check_rapid_depth_change*[T](start:int, stop:int, values: var seq[T], w:int
     if changes > 2:
         result = 0
 
+proc get_bnd_mate_pos*(a:string, vchrom:string): int {.inline.} =
+    if not (':' in a): return -1
+    var tmp = a.split(':')
+    var left = tmp[0]
+    var i = 0
+    while i < 3:
+      if left[i] in {'[', ']'}:
+        break
+      i += 1
+
+    var chrom = left[i+1..left.high]
+    if chrom != vchrom: return -1
+
+    var right = tmp[1]
+    i = 0
+    while right[i].isdigit:
+        i += 1
+    result = parseInt(right[0..<i])
+
+proc get_bnd_mate_pos(variant:Variant): int {.inline.} =
+    return get_bnd_mate_pos(variant.ALT[0], $variant.CHROM)
+
 proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Stats, gc_stats:var seq[Stats], fai:Fai): float64 =
     ## sets FORMAT fields for sample i in the variant and returns the DHBFC value
     var
       s = variant.start
       e = variant.stop
+
+    var bnd = get_bnd_mate_pos(variant)
+    if bnd != -1:
+      if bnd < s and s - bnd < 20000000:
+          e = s
+          s = bnd
+      elif bnd > e and bnd - e < 20000000:
+          s = e
+          e = bnd - 1
 
     var ss = fai.get($variant.CHROM, s, e).toUpperAscii()
     var gc = count_gc(ss)
@@ -247,7 +278,7 @@ proc fill_stats*[T](depths: var seq[T], stats:var Stats, gc_stats:var seq[Stats]
 
 
 iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Variant =
-  var depths : Fun[int16]
+  var depths : Fun[int16] = Fun[int16](values: newSeq[int16](), f:idepthfun)
   var
       targets = bam.hdr.targets
       target: Target
@@ -257,6 +288,7 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
     stats:Stats
     gc_stats:seq[Stats]
     gc_count:seq[float32]
+
 
   for variant in vcf:
       if variant.CHROM == last_chrom:
@@ -271,17 +303,19 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       gc_stats = newSeq[Stats](20)
       for i, g in gc_stats:
           gc_stats[i] = Stats()
-      gc_count.set_len(0)
+      gc_count = gc_count[0..<0]
       var
         start = 0
         i = targets.find(last_chrom)
+
+      depths.values.set_len(targets[i].length.int + 1)
+      zeroMem(depths.values[0].addr, depths.values.len * sizeof(depths.values[0]))
 
       if i == -1:
           yield variant
           continue
 
       target = targets[i]
-      depths = Fun[int16](values: new_seq[int16](target.length.int+1), f:idepthfun)
       discard genoiser[int16](bam, @[depths], target.name, 0, target.length.int)
 
       gc_count = fai.gc_content(last_chrom, step)
