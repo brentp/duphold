@@ -10,7 +10,6 @@ do not have lower than average coverage** compared to regions with similar gc-co
 single sample with:
 
 + **DHFC**: fold-change for the variant depth *relative to the rest of the chromosome* the variant was found on
-+ **DHBZ**: z-score for the variant depth *relative to bins in the genome with similar GC-content*.
 + **DHBFC**: fold-change for the variant depth *relative to bins in the genome with similar GC-content*.
 + **DHD**: rapid change in depth at one of the break-points (1 for higher (DUP). 0 for no or conflicting changes. -1 for drop (DUP), 2 or -2 for both break points)
 

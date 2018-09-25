@@ -1,3 +1,10 @@
+v0.0.7 (dev)
+============
++ remove DHBZ for the z-score. this was less useful than the fold-change values.
++ greatly import DHD. the cutoffs for this are now data-driven so that we expect a very low false-positive rate
+  of ends that are called to have a rapid change in depth. this requires an extra pass over each chromosome that
+  will add about 2 minutes of runtime per (human or similar-sized) genome.
+
 v0.0.6
 ======
 + `duphold` will now annotate the space between BND's that occur within 20MB on the same chromosome. Sometimes events that are obvious

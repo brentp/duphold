@@ -1,5 +1,7 @@
 import hts
+import times
 import strutils
+import strformat
 import os
 import math
 import docopt
@@ -8,46 +10,54 @@ import ./dupholdpkg/version
 
 const STEP = 200
 
-
 type Stats* = ref object
     n*: int
-    S*: float64
-    m*: float64
-    t*: int # total used for DHD
+    #S*: float64
+    mean*: float64
 
-proc update*(s:var Stats, d:int, include_zero:bool) {.inline.} =
+proc addm*(s:var Stats, d:int, include_zero:bool) {.inline.} =
     ## streaming mean, sd
     ## https://dsp.stackexchange.com/questions/811/determining-the-mean-and-standard-deviation-in-real-time
     if (not include_zero) and d == 0:
         return
     s.n += 1
-    var mprev = s.m
+    var mprev = s.mean
     var df = d.float64
-    s.m += (df - s.m) / s.n.float64
-    s.S += (df - s.m) * (df - mprev)
+    s.mean += (df - s.mean) / s.n.float64
+    #s.S += (df - s.mean) * (df - mprev)
+
+proc dropm*(s:var Stats, d:int, include_zero:bool) {.inline.} =
+    ## streaming mean, sd
+    ## https://lingpipe-blog.com/2009/07/07/welford-s-algorithm-delete-online-mean-variance-deviation/
+    if (not include_zero) and d == 0:
+        return
+    var df = d.float64
+    var mprev = (s.n.float64 * s.mean - df) / (s.n - 1).float64
+    s.n -= 1
+    #s.S -= (df - s.mean) * (df - mprev)
+    s.mean = mprev
+    if s.mean < 0:
+        s.mean = 0
 
 proc clear*(s:var Stats) =
     s.n = 0
-    s.S = 0
-    s.m = 0
-    s.t = 0
+    #s.S = 0
+    s.mean = 0
 
-proc stddev*(s:Stats): float64 {.inline.} =
-   sqrt(s.S/s.n.float64)
+#proc stddev*(s:Stats): float64 {.inline.} =
+#   sqrt(s.S/s.n.float64)
 
-proc addm*(s:Stats, d:int) {.inline.} =
-  # update only the t and n.
-  # not that this method is never used on a struct where the update method is also used.
-  s.n += 1
-  s.t += d
+proc fc*(a:Stats, b:Stats): float64 {.inline.} =
+    ## fold-change of a relative to b so that value is always > 1.
+    if a.mean > b.mean:
+      return a.mean / b.mean
+    return -b.mean / a.mean
 
-proc dropm*(s:Stats, d:int) {.inline.} =
-  # drp the t and the n.
-  s.n -= 1
-  s.t -= d
-
-proc mean*(s:Stats):float64 {.inline.} =
-    return s.t.float64 / s.n.float64
+#proc zsmall*(a:Stats, b:Stats): float64 {.inline.} =
+#  ## choose the z-score that will be the smallest by choosing the largest stdev
+#  if a.S/a.n.float64.abs > b.S/b.n.float64.abs:
+#    return (a.mean - b.mean) / a.stddev
+#  return (a.mean - b.mean) / b.stddev
 
 proc idepthfun*(aln:Record, posns:var seq[mrange]) =
   ## depthfun is an example of a `fun` that can be sent to `genoiser`.
@@ -99,79 +109,137 @@ proc get_or_empty[T](variant:Variant, field:string, input:var seq[T]) =
     else:
         quit "unknown type in get_or_empty"
 
-proc check_rapid_depth_change*[T](start:int, stop:int, values: var seq[T], w:int=7): int32 =
+
+type fc_position = tuple[fc:float64, position:int]
+
+proc check_rapid_depth_change_end*[T](position:int, dist:int, values:var seq[T], w:int=7): fc_position =
+    var
+      cs = max(w, position - dist - w)
+      left = Stats()
+      right = Stats()
+
+    for i in (cs-w)..<(cs):
+      left.addm(values[i], true)
+    for i in cs..<(cs + w):
+      right.addm(values[i], true)
+
+    result = (0'f64, 0.int)
+
+    for k in cs..min(position + dist + w, values.len - w - 1):
+
+        left.dropm(values[k-w], true)
+        left.addm(values[k], true)
+
+        right.dropm(values[k], true)
+        right.addm(values[k + w], true)
+
+        if values[k] == 0: continue
+
+        if left.mean < 7 and right.mean < 7:
+            continue
+
+        when defined(bdebug):
+          echo k, " ", left.fc(right), " rm:", right.mean, " lm:", left.mean
+
+        if left.fc(right).abs > result.fc.abs:
+            result.fc = left.fc(right)
+            result.position = k
+
+proc toIndex(fc: float64, vhigh:int, mult:float64): int {.inline.} =
+    result = (fc * mult).int
+    if result > vhigh:
+        result = vhigh
+
+proc find_fc_cutoff[T](values: var seq[T], fdr:float64=0.005, w:int=7): float64 =
+    var mult = 3000'f64
+
+    var
+      cs = w
+      left = Stats()
+      right = Stats()
+
+    var t = cpuTime()
+
+    for i in (cs-w)..<(cs):
+      left.addm(values[i], true)
+    for i in cs..<(cs + w):
+      right.addm(values[i], true)
+
+    result = 0
+
+    var fcs = newSeq[int](10000)
+    var added = 0
+
+    for k in cs..(values.len - w - 1):
+
+        left.dropm(values[k-w], true)
+        left.addm(values[k], true)
+
+        right.dropm(values[k], true)
+        right.addm(values[k + w], true)
+
+        if right.n != w:
+            quit "bad"
+        if left.n != w:
+            quit "bad"
+
+        #if k mod 100000 == 0:
+        #    echo left.mean, " ", right.mean
+        if values[k] == 0: continue
+
+        if left.mean < 7 and right.mean < 7:
+            continue
+
+
+        if left.mean > 800 or right.mean > 800: continue
+
+        var fc = left.fc(right)
+
+        added += 1
+        fcs[fc.abs.toIndex(fcs.high, mult)] += 1
+
+    var ncum = 0
+    var ni = 0
+    while ncum < int((1 - fdr) * (added).float64):
+        #ncum += negatives[ni]
+        ncum += fcs[ni]
+        ni += 1
+
+    # ni is the index and now we calculate the fold-change requred
+    result = ni.float64 / mult
+
+
+proc check_rapid_depth_change*[T](start:int, stop:int, values: var seq[T], w:int=7, cutoff:float64=1.2): int32 =
     ## if start and end indicate the bounds of a deletion, we can often expect to see a rapid change in
     ## depth at or near the break-point.
     var
-      # could use CI for this, but larger CI == less confident anyway.
-      dist = min(80, max(25, 0.05 * (stop - start).float64).int)
       # if we see too many changes then we can't trust the result.
       changes = 0
       d: float64
       last_change = 0
+      dist = min(80, max(25, 0.05 * (stop - start).float64).int)
 
-    for bi, bp in @[start, stop]:
-      var
-        close_changes = 0
-        cs = max(w, bp - dist - w)
-        left = Stats()
-        right = Stats()
+      left = check_rapid_depth_change_end(start, 10, values, w)
+      right = check_rapid_depth_change_end(stop, 10, values, w)
 
-      for i in (cs-w)..<(cs):
-          left.addm(values[i])
-      for i in cs..<(cs + w):
-          right.addm(values[i])
+    when defined(bdebug):
+      echo "start:", start, " stop:", stop
+      echo left
+      echo right
 
-      for k in cs..min(bp + dist + w, values.len - w - 1):
-        if (k - last_change) > w:
-            var
-                lm = left.mean
-                rm = right.mean
-            if lm < 8 and rm < 8:
-              left.dropm(values[k-w])
-              left.addm(values[k])
 
-              right.dropm(values[k])
-              right.addm(values[k + w])
-              continue
+    if left.fc.abs < cutoff:
+      left = check_rapid_depth_change_end(start, dist, values, w)
+    if right.fc.abs < cutoff:
+      right = check_rapid_depth_change_end(stop, dist, values, w)
 
-            if bi == 0:
-              d = rm / lm
-            else:
-              d = lm / rm
-            #if (k > start - 10 and k < start + 10) or (k > stop - 10 and k < stop + 10):
-            #    echo k, " ",d
+    if (left.fc > 0) == (right.fc > 0): return 0
 
-            # in addition to normal change (1.25), we have special-case here for when we're very close to either break-point.
-            # the changes <= bi makes sure we dont mess up an existing, better change that was
-            # already found.
-            var close = (((k - start).abs <= 3) or (k - stop).abs <= 3)
-            if close_changes == bi and d > 1.25 or (changes <= bi and d > 1.17 and close):
-              # if we are right near the break-point and we already found a conflicting change
-              # but this one is very good, we over-ride
-              if close and close_changes == bi and result < 0 and d > 1.25:
-                  changes = bi
-                  close_changes = bi + 1
-                  result = 0
-              changes += 1
-              #echo "DUP position:", k, " fc:", d, " changes:", changes, " left:", left.mean, " right:", right.mean , "close:", close
-              last_change = k
-              result += 1
-            if d < 0.7 or (changes <= bi and d < 0.8 and close):
-              changes += 1
-              last_change = k
-              #echo "DEL position:", k, " fc:", d, " changes:", changes, " left:", left.mean, " right:", right.mean
-              result -= 1
-        # now update left and right
-        left.dropm(values[k-w])
-        left.addm(values[k])
+    if left.fc > cutoff: result -= 1
+    if left.fc < -cutoff: result += 1
 
-        right.dropm(values[k])
-        right.addm(values[k + w])
-
-    #echo "FINISHED:", "changes:", changes, "result:", result
-    if changes > 2:
-        result = 0
+    if right.fc < -cutoff: result -= 1
+    if right.fc > cutoff: result += 1
 
 proc get_bnd_mate_pos*(a:string, vchrom:string): int {.inline.} =
     if not (':' in a): return -1
@@ -195,7 +263,7 @@ proc get_bnd_mate_pos*(a:string, vchrom:string): int {.inline.} =
 proc get_bnd_mate_pos(variant:Variant): int {.inline.} =
     return get_bnd_mate_pos(variant.ALT[0], $variant.CHROM)
 
-proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Stats, gc_stats:var seq[Stats], fai:Fai): float64 =
+proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Stats, gc_stats:var seq[Stats], fai:Fai, w:int=7, cutoff:float64=1.2): float64 =
     ## sets FORMAT fields for sample i in the variant and returns the DHBFC value
     var
       s = variant.start
@@ -218,7 +286,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var St
 
     var local_stats = Stats()
     for i in (s+1)..e:
-        local_stats.update(values[i], true)
+        local_stats.addm(values[i], true)
 
     var tmp = @[gc]
     if variant.info.set("GCF", tmp) != Status.OK:
@@ -227,19 +295,13 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var St
     var floats = newSeq[float32](variant.vcf.n_samples)
 
     get_or_empty(variant, "DHFC", floats)
-    var fc = local_stats.m / stats.m
+    var fc = local_stats.mean / stats.mean
     floats[sample_i] = fc.float32
     if variant.format.set("DHFC", floats) != Status.OK:
         quit "error setting DHFC in VCF"
 
-    get_or_empty(variant, "DHBZ", floats)
-    var gcz = (local_stats.m - gc_stat.m) / sqrt(gc_stat.S/gc_stat.n.float64)
-    floats[sample_i] = gcz.float32
-    if variant.format.set("DHBZ", floats) != Status.OK:
-        quit "error setting DHBZ in VCF"
-
     get_or_empty(variant, "DHBFC", floats)
-    var gfc = local_stats.m / gc_stat.m
+    var gfc = local_stats.mean / gc_stat.mean
     result = gfc
     floats[sample_i] = gfc.float32
     if variant.format.set("DHBFC", floats) != Status.OK:
@@ -247,20 +309,20 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var St
 
     var ints = newSeq[int32](variant.vcf.n_samples)
     get_or_empty(variant, "DHD", ints)
-    ints[sample_i] = check_rapid_depth_change(s, e, values)
+    ints[sample_i] = check_rapid_depth_change(s, e, values, cutoff=cutoff, w=w)
     if variant.format.set("DHD", ints) != Status.OK:
         quit "error setting DHD in VCF"
 
 proc fill_stats*[T](depths: var seq[T], stats:var Stats, gc_stats:var seq[Stats], gc_count:var seq[float32], step:int, target_length:int) =
   stats.clear()
   for v in depths:
-    stats.update(v, false)
+    stats.addm(v, false)
 
-  var dmax = int(stats.m + 4 * sqrt(stats.m))
+  var dmax = int(stats.mean + 4 * sqrt(stats.mean))
   stats.clear()
   for v in depths:
     if v < dmax:
-      stats.update(v, false)
+      stats.addm(v, false)
 
   # for each window of length step, gc_count holds the proportion of bases that were G or C
 
@@ -274,7 +336,7 @@ proc fill_stats*[T](depths: var seq[T], stats:var Stats, gc_stats:var seq[Stats]
       var gci = (19 * gc_count[wi]).int
       # get the correct stat for the gc in this window and update it.
       for i in w0..<(w0 + step):
-          gc_stats[gci].update(depths[i], false)
+          gc_stats[gci].addm(depths[i], false)
 
 
 iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Variant =
@@ -288,11 +350,13 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
     stats:Stats
     gc_stats:seq[Stats]
     gc_count:seq[float32]
+    dhd_cutoff: float64
+    w = 7
 
 
   for variant in vcf:
       if variant.CHROM == last_chrom:
-          discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai)
+          discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai, cutoff=dhd_cutoff, w=w)
 
           yield variant
           continue
@@ -318,10 +382,16 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       target = targets[i]
       discard genoiser[int16](bam, @[depths], target.name, 0, target.length.int)
 
+      #var p = 25158703
+      #for i in (p-5..p+5):
+      #    echo i, " ",depths.values[i]
+
       gc_count = fai.gc_content(last_chrom, step)
       depths.values.fill_stats(stats, gc_stats, gc_count, step, target.length.int)
 
-      discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai)
+      dhd_cutoff = depths.values.find_fc_cutoff(fdr=0.005, w=w)
+
+      discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai, cutoff=dhd_cutoff, w=w)
       yield variant
 
 proc sample_name(b:Bam): string =
@@ -378,8 +448,6 @@ Options:
   #if vcf.header.add_format("DHZ", "1", "Float", "duphold z-score for depth") != Status.OK:
   #    quit "unable to add to header"
   if vcf.header.add_format("DHFC", "1", "Float", "duphold depth fold-change") != Status.OK:
-      quit "unable to add to header"
-  if vcf.header.add_format("DHBZ", "1", "Float", "duphold z-score for depth compared to bins with matching GC") != Status.OK:
       quit "unable to add to header"
   if vcf.header.add_format("DHBFC", "1", "Float", "duphold depth fold-change compared to bins with matching GC") != Status.OK:
       quit "unable to add to header"
