@@ -1,5 +1,6 @@
 import hts
 import times
+import algorithm
 import random
 import strutils
 import strformat
@@ -114,11 +115,7 @@ proc dropm*(s:var Stats, d:int, include_zero:bool) {.inline.} =
 
 proc clear*(s:var Stats) =
     s.n = 0
-    #s.S = 0
     s.mean = 0
-
-#proc stddev*(s:Stats): float64 {.inline.} =
-#   sqrt(s.S/s.n.float64)
 
 proc fc*(a:Stats, b:Stats): float64 {.inline.} =
     ## fold-change of a relative to b so that value is always > 1.
@@ -126,11 +123,12 @@ proc fc*(a:Stats, b:Stats): float64 {.inline.} =
       return a.mean / b.mean
     return -b.mean / a.mean
 
-#proc zsmall*(a:Stats, b:Stats): float64 {.inline.} =
-#  ## choose the z-score that will be the smallest by choosing the largest stdev
-#  if a.S/a.n.float64.abs > b.S/b.n.float64.abs:
-#    return (a.mean - b.mean) / a.stddev
-#  return (a.mean - b.mean) / b.stddev
+type Discordant* = ref object
+  left*: uint32
+  right*: uint32
+
+proc `$`*(d:Discordant): string =
+    return &"Discordant(left: {d.left}, right: {d.right}"
 
 proc idepthfun*(aln:Record, posns:var seq[mrange]) =
   ## depthfun is an example of a `fun` that can be sent to `genoiser`.
@@ -358,10 +356,32 @@ proc get_bnd_mate_pos*(a:string, vchrom:string): int {.inline.} =
         i += 1
     result = parseInt(right[0..<i])
 
+proc count(discordants:var seq[Discordant], s:int, e:int, i99:int, slop:int=25): int =
+    ## count the number of discordants that span s..e but are within d of both.
+    var ilow = lowerBound(discordants, Discordant(left:uint32(s - i99)), proc(a, b: Discordant):int =
+        if a.left == b.left:
+            return a.right.int - b.right.int
+        return a.left.int - b.left.int
+    )
+    if ilow > ilow: ilow -= 1
+    for i in ilow..discordants.high:
+        var disc = discordants[i]
+        if disc.left.int > s + slop: break
+        if s - disc.left.int > i99: continue
+
+        if disc.right.int - (e - slop) < i99:
+          # after correcting for the event, the insert should fall in the expected distribution.
+          #echo &"s-e:{s}-{e} supported by: {disc} with corrected span: {(disc.right.int - disc.left.int) - (e - s)}"
+          var corrected = (disc.right.int - disc.left.int) - (e - s)
+          if corrected < i99 and corrected > -2*slop:
+            #echo "added"
+            result += 1
+
+
 proc get_bnd_mate_pos(variant:Variant): int {.inline.} =
     return get_bnd_mate_pos(variant.ALT[0], $variant.CHROM)
 
-proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var MedianStats, gc_stats:var seq[MedianStats], fai:Fai, w:int=7, cutoffs:seq[float64]): float64 =
+proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var MedianStats, gc_stats:var seq[MedianStats], fai:Fai, w:int=7, cutoffs:seq[float64], discordants:var seq[Discordant], i99:int): float64 =
     ## sets FORMAT fields for sample i in the variant and returns the DHBFC value
     var
       s = variant.start
@@ -375,6 +395,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
       elif bnd > e and bnd - e < 20000000:
           s = e
           e = bnd - 1
+
 
     var ss = fai.get($variant.CHROM, s, e).toUpperAscii()
     var gc = count_gc(ss)
@@ -422,6 +443,12 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
     if variant.format.set("DHD", ints) != Status.OK:
         quit "error setting DHD in VCF"
 
+    if variant.ALT[0] == "<DEL>" or (variant.ALT[0] != "<" and len(variant.REF) > len(variant.ALT[0])):
+      get_or_empty(variant, "DHSP", ints)
+      ints[sample_i] = discordants.count(s, e, i99).int32
+      if variant.format.set("DHSP", ints) != Status.OK:
+          quit "error setting DHSP in VCF"
+
 proc fill_stats*[T](depths: var seq[T], stats:var MedianStats, gc_stats:var seq[MedianStats], gc_count:var seq[float32], step:int, target_length:int) =
   stats.clear()
   for v in depths:
@@ -449,15 +476,11 @@ proc get_isize_distribution(bam:Bam, n:int=4000000, skip=500000): MedianStats =
         if k < skip: continue
 
         if aln.mapping_quality == 0: continue
-        if not aln.flag.read1: continue
-        if not aln.flag.proper_pair: continue
+        #if not aln.flag.proper_pair: continue
+        if aln.stop >= aln.mate_pos: continue
         result.addm(aln.isize.abs, true)
         if result.n == n:
             return
-
-type Discordant* = ref object
-  left*: uint32
-  right*: uint32
 
 iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Variant =
   var depths : Fun[int16] = Fun[int16](values: newSeq[int16](), f:idepthfun)
@@ -473,22 +496,33 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
     dhd_cutoffs: seq[float64]
     w = 1
 
-  var i99 = bam.get_isize_distribution().percentile(99)
+  var id = bam.get_isize_distribution()
+  # we add a lot of stuff to the discs so that we don't miss anything
+  # but we use a more stringent i99 to decide what's normal when we check
+  # for read-pairs that a deletion--this actually ends up making more pairs
+  # support the deletion.
+  var i95 = id.percentile(95)
+  var i99 = id.percentile(99)
   var discs = newSeqOfCap[Discordant](16384)
   proc ifun(aln:Record, posns: var seq[mrange]) =
       if aln.mapping_quality == 0:
           return
       var f = aln.flag
       if f.unmapped or f.secondary or f.qcfail or f.dup: return
-      if not f.read1: return
-      if aln.isize < i99: return
+      if aln.stop >= aln.mate_pos: return
+      if aln.isize < i95: return
+      if aln.isize > 50000000: return
+      #var cig = aln.cigar
+      #if cig[cig.len-1].op != CigarOp(soft_clip):
       discs.add(Discordant(left:aln.stop.uint32, right: aln.mate_pos.uint32))
+      #else:
+      #  discs.add(Discordant(left:(aln.stop.uint32 + cig[cig.len-1].len.uint32), right: aln.mate_pos.uint32))
 
   var iempty : Fun[int16] = Fun[int16](values:newSeq[int16](), f:ifun)
 
   for variant in vcf:
       if variant.CHROM == last_chrom:
-          discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai, cutoffs=dhd_cutoffs, w=w)
+          discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai, cutoffs=dhd_cutoffs, w=w, discordants=discs, i99=i99)
 
           yield variant
           continue
@@ -513,7 +547,6 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
 
       target = targets[i]
       discard genoiser[int16](bam, @[depths, iempty], target.name, 0, target.length.int)
-      echo "discordants:", discs.len
 
       #var p = 25158703
       #for i in (p-5..p+5):
@@ -523,9 +556,13 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       depths.values.fill_stats(stats, gc_stats, gc_count, step, target.length.int)
 
       dhd_cutoffs = depths.values.find_fc_cutoffs(fdrs=(@[0.002, 0.0002]), w=w)
-      echo dhd_cutoffs
+      sort(discs, proc(a, b:Discordant): int =
+          if a.left == b.left:
+              return a.right.int - b.right.int
+          return a.left.int - b.left.int
+      )
 
-      discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai, cutoffs=dhd_cutoffs, w=w)
+      discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai, cutoffs=dhd_cutoffs, w=w, discordants=discs, i99=i99)
       yield variant
 
 proc sample_name(b:Bam): string =
@@ -587,7 +624,8 @@ Options:
       quit "unable to add to header"
   if vcf.header.add_format("DHD", "1", "Integer", "duphold rapid change in depth at one of the break-points (1 for higher. 0 for no or conflicting changes. -1 for drop, 2 for both break points)") != Status.OK:
       quit "unable to add to header"
-
+  if vcf.header.add_format("DHSP", "1", "Integer", "duphold count of spanning read-pairs") != Status.OK:
+      quit "unable DHSP to add to header"
 
   open(bam, $args["--bam"], index=true, threads=parseInt($args["--threads"]), fai=($args["--fasta"]))
   if bam == nil:
