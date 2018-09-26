@@ -27,7 +27,7 @@ coming soon.
 
 ## Install
 
-`duphold` is distributed as a binary [here] and requires libhts.so in standard locations or indicated with `LD_LIBRARY_PATH`.
+`duphold` is distributed as a binary [here](https://github.com/brentp/duphold/releases/latest) and requires libhts.so in standard locations or indicated with `LD_LIBRARY_PATH`.
 
 
 
