@@ -598,10 +598,13 @@ Options:
     sample_i: int
 
   if $args["--fasta"] == "nil":
+    echo doc
     quit "--fasta is required"
   if $args["--vcf"] == "nil":
+    echo doc
     quit "--vcf is required"
   if $args["--bam"] == "nil":
+    echo doc
     quit "--bam is required"
 
   if not open(fai, $args["--fasta"]):
