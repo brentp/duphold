@@ -374,9 +374,7 @@ proc count(discordants:var seq[Discordant], s:int, e:int, i99:int, slop:int=25):
           #echo &"s-e:{s}-{e} supported by: {disc} with corrected span: {(disc.right.int - disc.left.int) - (e - s)}"
           var corrected = (disc.right.int - disc.left.int) - (e - s)
           if corrected < i99 and corrected > -2*slop:
-            #echo "added"
             result += 1
-
 
 proc get_bnd_mate_pos(variant:Variant): int {.inline.} =
     return get_bnd_mate_pos(variant.ALT[0], $variant.CHROM)

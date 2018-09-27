@@ -5,6 +5,7 @@ v0.0.7 (dev)
   of ends that are called to have a rapid change in depth. this requires an extra pass over each chromosome that
   will add about 2 minutes of runtime per (human or similar-sized) genome.
 + `DHBFC` is now based on the median instead of mean so it is less susceptible to outliers. 
++ fix bug that in rare cases resulted in exiting with "how"
 
 v0.0.6
 ======
