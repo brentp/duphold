@@ -1,1 +1,1 @@
-const dupholdVersion* = "0.0.6"
+const dupholdVersion* = "0.0.7"
