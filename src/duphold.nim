@@ -1,5 +1,7 @@
 import hts
 import times
+import algorithm
+import random
 import strutils
 import strformat
 import os
@@ -10,9 +12,77 @@ import ./dupholdpkg/version
 
 const STEP = 200
 
+type MedianStats* = ref object
+  ## since we expect nearly all values to be < 1000
+  ## we can store counts of observed values in a fixed-size array
+  ## and get median (or any percentile) from those.
+  ## we can even keep a moving window of medians as we can drop
+  ## values by decrementing the counts.
+  counts*: array[1000, int]
+  i_ok: bool
+  i_median: int
+  n*: int
+
+proc addm*(m:MedianStats, d:int, include_zero:bool) {.inline.} =
+    if d == 0 and (not include_zero):
+        return
+    m.i_ok = false
+    if d > m.counts.high:
+      m.counts[m.counts.high] += 1
+    else:
+      m.counts[d] += 1
+    m.n += 1
+
+proc dropm*(m:MedianStats, d:int, include_zero:bool) {.inline.} =
+    if d == 0 and (not include_zero):
+        return
+    m.i_ok = false
+    if d > m.counts.high:
+      m.counts[m.counts.high] -= 1
+    else:
+      m.counts[d] -= 1
+    m.n -= 1
+
+proc clear*(m:MedianStats) =
+    zeroMem(m.counts[0].addr, sizeof(m.counts[0]) * m.counts.len)
+    m.i_ok = false
+    m.i_median = 0
+    m.n = 0
+
+proc median*(m:MedianStats): int {.inline.} =
+    if m.i_ok:
+      return m.i_median
+
+    var cum = 0
+    var stop_n = (m.n.float32 * 0.5'f32).int
+    for i, cnt in m.counts:
+        cum += cnt
+        if cum >= stop_n:
+            m.i_median = i
+            m.i_ok = true
+            break
+    return m.i_median
+
+proc percentile*(m:MedianStats, pct:float64): int {.inline.} =
+  ## return the value at the requested percentile.
+  var cum = 0
+  var p = pct
+  if p > 1: p /= 100.0
+  if p > 1:
+      quit "can't get value outside of distribution (> 1)"
+
+  var stop_n = (m.n.float64 * p).int
+  for i, cnt in m.counts:
+        cum += cnt
+        if cum >= stop_n:
+            return i
+  return -1
+
+proc `$`(m:MedianStats): string =
+    return &"MedianStats(n:{m.n}, median:{m.median} vals: {m.counts[0..100]})"
+
 type Stats* = ref object
     n*: int
-    #S*: float64
     mean*: float64
 
 proc addm*(s:var Stats, d:int, include_zero:bool) {.inline.} =
@@ -32,6 +102,10 @@ proc dropm*(s:var Stats, d:int, include_zero:bool) {.inline.} =
     if (not include_zero) and d == 0:
         return
     var df = d.float64
+    if s.n == 1:
+        s.mean = 0
+        s.n = 0
+        return
     var mprev = (s.n.float64 * s.mean - df) / (s.n - 1).float64
     s.n -= 1
     #s.S -= (df - s.mean) * (df - mprev)
@@ -41,11 +115,7 @@ proc dropm*(s:var Stats, d:int, include_zero:bool) {.inline.} =
 
 proc clear*(s:var Stats) =
     s.n = 0
-    #s.S = 0
     s.mean = 0
-
-#proc stddev*(s:Stats): float64 {.inline.} =
-#   sqrt(s.S/s.n.float64)
 
 proc fc*(a:Stats, b:Stats): float64 {.inline.} =
     ## fold-change of a relative to b so that value is always > 1.
@@ -53,11 +123,12 @@ proc fc*(a:Stats, b:Stats): float64 {.inline.} =
       return a.mean / b.mean
     return -b.mean / a.mean
 
-#proc zsmall*(a:Stats, b:Stats): float64 {.inline.} =
-#  ## choose the z-score that will be the smallest by choosing the largest stdev
-#  if a.S/a.n.float64.abs > b.S/b.n.float64.abs:
-#    return (a.mean - b.mean) / a.stddev
-#  return (a.mean - b.mean) / b.stddev
+type Discordant* = ref object
+  left*: uint32
+  right*: uint32
+
+proc `$`*(d:Discordant): string =
+    return &"Discordant(left: {d.left}, right: {d.right}"
 
 proc idepthfun*(aln:Record, posns:var seq[mrange]) =
   ## depthfun is an example of a `fun` that can be sent to `genoiser`.
@@ -112,7 +183,7 @@ proc get_or_empty[T](variant:Variant, field:string, input:var seq[T]) =
 
 type fc_position = tuple[fc:float64, position:int]
 
-proc check_rapid_depth_change_end*[T](position:int, dist:int, values:var seq[T], w:int=7): fc_position =
+proc check_rapid_depth_change_end*[T](position:int, dist:int, values:var seq[T], w:int, cutoff:float64): fc_position =
     var
       cs = max(w, position - dist - w)
       left = Stats()
@@ -123,7 +194,10 @@ proc check_rapid_depth_change_end*[T](position:int, dist:int, values:var seq[T],
     for i in cs..<(cs + w):
       right.addm(values[i], true)
 
-    result = (0'f64, 0.int)
+    result = (0'f64, -1.int)
+
+    var gt1p1 = 0
+    var lastgt = -10000
 
     for k in cs..min(position + dist + w, values.len - w - 1):
 
@@ -138,19 +212,29 @@ proc check_rapid_depth_change_end*[T](position:int, dist:int, values:var seq[T],
         if left.mean < 7 and right.mean < 7:
             continue
 
-        when defined(bdebug):
-          echo k, " ", left.fc(right), " rm:", right.mean, " lm:", left.mean
+        #when defined(bdebug):
+        #  echo k, " ", left.fc(right), " rm:", right.mean, " lm:", left.mean
+
+        if left.fc(right).abs > cutoff:
+            if k - lastgt > w:
+                gt1p1 += 1
+            lastgt = k
 
         if left.fc(right).abs > result.fc.abs:
             result.fc = left.fc(right)
             result.position = k
+    if gt1p1 >= 3 and result.fc < cutoff:
+        result.position = -1
+        result.fc = 0
 
 proc toIndex(fc: float64, vhigh:int, mult:float64): int {.inline.} =
+    if fc.classify == fcInf:
+        return vhigh
     result = (fc * mult).int
     if result > vhigh:
         result = vhigh
 
-proc find_fc_cutoff[T](values: var seq[T], fdr:float64=0.005, w:int=7): float64 =
+proc find_fc_cutoffs[T](values: var seq[T], fdrs:seq[float64], w:int): seq[float64] =
     var mult = 3000'f64
 
     var
@@ -165,7 +249,7 @@ proc find_fc_cutoff[T](values: var seq[T], fdr:float64=0.005, w:int=7): float64 
     for i in cs..<(cs + w):
       right.addm(values[i], true)
 
-    result = 0
+    result = newSeq[float64](fdrs.len)
 
     var fcs = newSeq[int](10000)
     var added = 0
@@ -190,7 +274,6 @@ proc find_fc_cutoff[T](values: var seq[T], fdr:float64=0.005, w:int=7): float64 
         if left.mean < 7 and right.mean < 7:
             continue
 
-
         if left.mean > 800 or right.mean > 800: continue
 
         var fc = left.fc(right)
@@ -200,46 +283,59 @@ proc find_fc_cutoff[T](values: var seq[T], fdr:float64=0.005, w:int=7): float64 
 
     var ncum = 0
     var ni = 0
-    while ncum < int((1 - fdr) * (added).float64):
-        #ncum += negatives[ni]
-        ncum += fcs[ni]
-        ni += 1
+    for k, fdr in fdrs:
+        while ncum < int((1 - fdr) * (added).float64):
+            #ncum += negatives[ni]
+            ncum += fcs[ni]
+            ni += 1
+        # ni is the index and now we calculate the fold-change requred
+        result[k] = ni.float64 / mult
 
-    # ni is the index and now we calculate the fold-change requred
-    result = ni.float64 / mult
 
-
-proc check_rapid_depth_change*[T](start:int, stop:int, values: var seq[T], w:int=7, cutoff:float64=1.2): int32 =
+proc check_rapid_depth_change*[T](start:int, stop:int, values: var seq[T], cutoffs:seq[float64], w:int): int32 =
     ## if start and end indicate the bounds of a deletion, we can often expect to see a rapid change in
     ## depth at or near the break-point.
+    ## cutoffs should have length 2 and the first value is less stringnet-- for looking near the
+    ## break-point. the 2nd value is more stringent in case we have to look farther from the break.
     var
       # if we see too many changes then we can't trust the result.
       changes = 0
       d: float64
       last_change = 0
-      dist = min(80, max(25, 0.05 * (stop - start).float64).int)
+      dist = min(80, max(25, 0.08 * (stop - start).float64).int)
 
-      left = check_rapid_depth_change_end(start, 10, values, w)
-      right = check_rapid_depth_change_end(stop, 10, values, w)
+      left = check_rapid_depth_change_end(start, 4, values, w, cutoffs[0])
+      right = check_rapid_depth_change_end(stop, 4, values, w, cutoffs[0])
 
     when defined(bdebug):
       echo "start:", start, " stop:", stop
       echo left
       echo right
+      echo result
+
+    if left.fc.abs < cutoffs[0] and left.position != -1:
+      left = check_rapid_depth_change_end(start, dist, values, w, cutoffs[0])
+    if right.fc.abs < cutoffs[0] and right.position != -1:
+      right = check_rapid_depth_change_end(stop, dist, values, w, cutoffs[0])
+
+    when defined(bdebug):
+      echo "start:", start, " stop:", stop
+      echo left
+      echo right
+      echo result
 
 
-    if left.fc.abs < cutoff:
-      left = check_rapid_depth_change_end(start, dist, values, w)
-    if right.fc.abs < cutoff:
-      right = check_rapid_depth_change_end(stop, dist, values, w)
+    # if position is -1, we had no data for 1 side.
+    if (left.fc > 0) == (right.fc > 0) and (left.position != -1 and right.position != -1): return 0
+    if left.position == -1 and right.position == -1: return 0
 
-    if (left.fc > 0) == (right.fc > 0): return 0
+    if left.position != -1:
+      if left.fc > cutoffs[1]: result -= 1
+      if left.fc < -cutoffs[1]: result += 1
 
-    if left.fc > cutoff: result -= 1
-    if left.fc < -cutoff: result += 1
-
-    if right.fc < -cutoff: result -= 1
-    if right.fc > cutoff: result += 1
+    if right.position != -1:
+      if right.fc < -cutoffs[1]: result -= 1
+      if right.fc > cutoffs[1]: result += 1
 
 proc get_bnd_mate_pos*(a:string, vchrom:string): int {.inline.} =
     if not (':' in a): return -1
@@ -260,10 +356,30 @@ proc get_bnd_mate_pos*(a:string, vchrom:string): int {.inline.} =
         i += 1
     result = parseInt(right[0..<i])
 
+proc count(discordants:var seq[Discordant], s:int, e:int, i99:int, slop:int=25): int =
+    ## count the number of discordants that span s..e but are within d of both.
+    var ilow = lowerBound(discordants, Discordant(left:uint32(s - i99)), proc(a, b: Discordant):int =
+        if a.left == b.left:
+            return a.right.int - b.right.int
+        return a.left.int - b.left.int
+    )
+    if ilow > ilow: ilow -= 1
+    for i in ilow..discordants.high:
+        var disc = discordants[i]
+        if disc.left.int > s + slop: break
+        if s - disc.left.int > i99: continue
+
+        if disc.right.int - (e - slop) < i99:
+          # after correcting for the event, the insert should fall in the expected distribution.
+          #echo &"s-e:{s}-{e} supported by: {disc} with corrected span: {(disc.right.int - disc.left.int) - (e - s)}"
+          var corrected = (disc.right.int - disc.left.int) - (e - s)
+          if corrected < i99 and corrected > -2*slop:
+            result += 1
+
 proc get_bnd_mate_pos(variant:Variant): int {.inline.} =
     return get_bnd_mate_pos(variant.ALT[0], $variant.CHROM)
 
-proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Stats, gc_stats:var seq[Stats], fai:Fai, w:int=7, cutoff:float64=1.2): float64 =
+proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var MedianStats, gc_stats:var seq[MedianStats], fai:Fai, w:int=7, cutoffs:seq[float64], discordants:var seq[Discordant], i99:int): float64 =
     ## sets FORMAT fields for sample i in the variant and returns the DHBFC value
     var
       s = variant.start
@@ -278,13 +394,13 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var St
           s = e
           e = bnd - 1
 
+
     var ss = fai.get($variant.CHROM, s, e).toUpperAscii()
     var gc = count_gc(ss)
     var gci = (19 * gc).int
     var gc_stat = gc_stats[gci]
-    #echo gci, " ", gc, " ", gc_stat.n, " ", gc_stat.S
 
-    var local_stats = Stats()
+    var local_stats = MedianStats()
     for i in (s+1)..e:
         local_stats.addm(values[i], true)
 
@@ -295,13 +411,25 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var St
     var floats = newSeq[float32](variant.vcf.n_samples)
 
     get_or_empty(variant, "DHFC", floats)
-    var fc = local_stats.mean / stats.mean
-    floats[sample_i] = fc.float32
+    var fc = local_stats.median.float32 / stats.median.float32
+
+    #echo fc, " -> ", local_stats
+    #for k in 0..10:
+    #    var ss = rand(len(values) - 100000)
+    #    var ee = ss + (e - s)
+    #    var ls = MedianStats()
+    #    for i in (ss+1)..ee:
+    #        ls.addm(values[i], true)
+    #
+    #    #echo "sim (should be ~ 1):", ls.median.float32 / stats.median.float32
+
+
+    floats[sample_i] = fc
     if variant.format.set("DHFC", floats) != Status.OK:
         quit "error setting DHFC in VCF"
 
     get_or_empty(variant, "DHBFC", floats)
-    var gfc = local_stats.mean / gc_stat.mean
+    var gfc = local_stats.median.float32 / gc_stat.median.float32
     result = gfc
     floats[sample_i] = gfc.float32
     if variant.format.set("DHBFC", floats) != Status.OK:
@@ -309,24 +437,24 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var St
 
     var ints = newSeq[int32](variant.vcf.n_samples)
     get_or_empty(variant, "DHD", ints)
-    ints[sample_i] = check_rapid_depth_change(s, e, values, cutoff=cutoff, w=w)
+    ints[sample_i] = check_rapid_depth_change(s, e, values, cutoffs=cutoffs, w=w)
     if variant.format.set("DHD", ints) != Status.OK:
         quit "error setting DHD in VCF"
 
-proc fill_stats*[T](depths: var seq[T], stats:var Stats, gc_stats:var seq[Stats], gc_count:var seq[float32], step:int, target_length:int) =
-  stats.clear()
-  for v in depths:
-    stats.addm(v, false)
+    if variant.ALT[0] == "<DEL>" or (variant.ALT[0] != "<" and len(variant.REF) > len(variant.ALT[0])):
+      get_or_empty(variant, "DHSP", ints)
+      ints[sample_i] = discordants.count(s, e, i99).int32
+      if variant.format.set("DHSP", ints) != Status.OK:
+          quit "error setting DHSP in VCF"
 
-  var dmax = int(stats.mean + 4 * sqrt(stats.mean))
+proc fill_stats*[T](depths: var seq[T], stats:var MedianStats, gc_stats:var seq[MedianStats], gc_count:var seq[float32], step:int, target_length:int) =
   stats.clear()
   for v in depths:
-    if v < dmax:
-      stats.addm(v, false)
+    stats.addm(v, true)
+
+  echo "median:", stats.median
 
   # for each window of length step, gc_count holds the proportion of bases that were G or C
-
-
   # now, for each window, we determine the gc bin (multiply by 20 to get the i) and update the
   # stats for that bin.
   var wi = -1
@@ -336,8 +464,21 @@ proc fill_stats*[T](depths: var seq[T], stats:var Stats, gc_stats:var seq[Stats]
       var gci = (19 * gc_count[wi]).int
       # get the correct stat for the gc in this window and update it.
       for i in w0..<(w0 + step):
-          gc_stats[gci].addm(depths[i], false)
+          gc_stats[gci].addm(depths[i], true)
 
+proc get_isize_distribution(bam:Bam, n:int=4000000, skip=500000): MedianStats =
+    result = MedianStats()
+    var k = 0
+    for aln in bam:
+        k += 1
+        if k < skip: continue
+
+        if aln.mapping_quality == 0: continue
+        #if not aln.flag.proper_pair: continue
+        if aln.stop >= aln.mate_pos: continue
+        result.addm(aln.isize.abs, true)
+        if result.n == n:
+            return
 
 iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Variant =
   var depths : Fun[int16] = Fun[int16](values: newSeq[int16](), f:idepthfun)
@@ -347,26 +488,49 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
 
   var
     last_chrom = ""
-    stats:Stats
-    gc_stats:seq[Stats]
+    stats:MedianStats
+    gc_stats:seq[MedianStats]
     gc_count:seq[float32]
-    dhd_cutoff: float64
-    w = 7
+    dhd_cutoffs: seq[float64]
+    w = 1
 
+  var id = bam.get_isize_distribution()
+  # we add a lot of stuff to the discs so that we don't miss anything
+  # but we use a more stringent i99 to decide what's normal when we check
+  # for read-pairs that a deletion--this actually ends up making more pairs
+  # support the deletion.
+  var i95 = id.percentile(95)
+  var i99 = id.percentile(99)
+  var discs = newSeqOfCap[Discordant](16384)
+  proc ifun(aln:Record, posns: var seq[mrange]) =
+      if aln.mapping_quality == 0:
+          return
+      var f = aln.flag
+      if f.unmapped or f.secondary or f.qcfail or f.dup: return
+      if aln.stop >= aln.mate_pos: return
+      if aln.isize < i95: return
+      if aln.isize > 50000000: return
+      #var cig = aln.cigar
+      #if cig[cig.len-1].op != CigarOp(soft_clip):
+      discs.add(Discordant(left:aln.stop.uint32, right: aln.mate_pos.uint32))
+      #else:
+      #  discs.add(Discordant(left:(aln.stop.uint32 + cig[cig.len-1].len.uint32), right: aln.mate_pos.uint32))
+
+  var iempty : Fun[int16] = Fun[int16](values:newSeq[int16](), f:ifun)
 
   for variant in vcf:
       if variant.CHROM == last_chrom:
-          discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai, cutoff=dhd_cutoff, w=w)
+          discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai, cutoffs=dhd_cutoffs, w=w, discordants=discs, i99=i99)
 
           yield variant
           continue
 
       target = nil
       last_chrom = $variant.CHROM
-      stats = Stats()
-      gc_stats = newSeq[Stats](20)
+      stats = MedianStats()
+      gc_stats = newSeq[MedianStats](20)
       for i, g in gc_stats:
-          gc_stats[i] = Stats()
+          gc_stats[i] = MedianStats()
       gc_count = gc_count[0..<0]
       var
         start = 0
@@ -380,7 +544,7 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
           continue
 
       target = targets[i]
-      discard genoiser[int16](bam, @[depths], target.name, 0, target.length.int)
+      discard genoiser[int16](bam, @[depths, iempty], target.name, 0, target.length.int)
 
       #var p = 25158703
       #for i in (p-5..p+5):
@@ -389,9 +553,14 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       gc_count = fai.gc_content(last_chrom, step)
       depths.values.fill_stats(stats, gc_stats, gc_count, step, target.length.int)
 
-      dhd_cutoff = depths.values.find_fc_cutoff(fdr=0.005, w=w)
+      dhd_cutoffs = depths.values.find_fc_cutoffs(fdrs=(@[0.002, 0.0002]), w=w)
+      sort(discs, proc(a, b:Discordant): int =
+          if a.left == b.left:
+              return a.right.int - b.right.int
+          return a.left.int - b.left.int
+      )
 
-      discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai, cutoff=dhd_cutoff, w=w)
+      discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai, cutoffs=dhd_cutoffs, w=w, discordants=discs, i99=i99)
       yield variant
 
 proc sample_name(b:Bam): string =
@@ -429,10 +598,13 @@ Options:
     sample_i: int
 
   if $args["--fasta"] == "nil":
+    echo doc
     quit "--fasta is required"
   if $args["--vcf"] == "nil":
+    echo doc
     quit "--vcf is required"
   if $args["--bam"] == "nil":
+    echo doc
     quit "--bam is required"
 
   if not open(fai, $args["--fasta"]):
@@ -453,7 +625,8 @@ Options:
       quit "unable to add to header"
   if vcf.header.add_format("DHD", "1", "Integer", "duphold rapid change in depth at one of the break-points (1 for higher. 0 for no or conflicting changes. -1 for drop, 2 for both break points)") != Status.OK:
       quit "unable to add to header"
-
+  if vcf.header.add_format("DHSP", "1", "Integer", "duphold count of spanning read-pairs") != Status.OK:
+      quit "unable DHSP to add to header"
 
   open(bam, $args["--bam"], index=true, threads=parseInt($args["--threads"]), fai=($args["--fasta"]))
   if bam == nil:
@@ -479,6 +652,8 @@ Options:
   ovcf.close()
   vcf.close()
   bam.close()
+
+  GC_FullCollect()
 
 when isMainModule:
     main(commandLineParams())
