@@ -1,3 +1,5 @@
+![Build Status](https://travis-ci.org/brentp/duphold.svg?branch=master)](https://travis-ci.org/brentp/duphold)
+
 # duphold: uphold your DUP and DEL calls
 
 SV callers like [lumpy](https://github.com/arq5x/lumpy) look at split-reads and pair distances to find structural variants.

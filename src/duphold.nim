@@ -54,7 +54,7 @@ proc median*(m:MedianStats): int {.inline.} =
       return m.i_median
 
     var cum = 0
-    var stop_n = (m.n.float32 * 0.5'f32).int
+    var stop_n = (0.5 + m.n.float32 * 0.5'f32).int
     for i, cnt in m.counts:
         cum += cnt
         if cum >= stop_n:
@@ -451,8 +451,6 @@ proc fill_stats*[T](depths: var seq[T], stats:var MedianStats, gc_stats:var seq[
   stats.clear()
   for v in depths:
     stats.addm(v, true)
-
-  echo "median:", stats.median
 
   # for each window of length step, gc_count holds the proportion of bases that were G or C
   # now, for each window, we determine the gc bin (multiply by 20 to get the i) and update the

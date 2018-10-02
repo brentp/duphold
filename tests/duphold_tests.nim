@@ -32,20 +32,18 @@ suite "test duphold":
   test "median":
 
       var m = MedianStats()
-
       check m.median == 0
-
-      m.addm(10)
+      m.addm(10, true)
       check m.median == 10
-      m.addm(1)
-      m.addm(5)
+      m.addm(1, true)
+      m.addm(5, true)
       check m.median == 5
 
       for k in 0..100:
-          m.addm(2000)
+          m.addm(2000, true)
       check m.median == 999
       for k in 0..100:
-          m.dropm(2000)
+          m.dropm(2000, true)
       check m.median == 5
 
       m.clear
