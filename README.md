@@ -1,4 +1,4 @@
-![Build Status](https://travis-ci.org/brentp/duphold.svg?branch=master)](https://travis-ci.org/brentp/duphold)
+[![Build Status](https://travis-ci.org/brentp/duphold.svg?branch=master)](https://travis-ci.org/brentp/duphold)
 
 # duphold: uphold your DUP and DEL calls
 
