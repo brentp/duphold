@@ -394,6 +394,9 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
           s = e
           e = bnd - 1
 
+    if bnd == -1:
+        # skip distant BND's as this is not informative
+        if ':' in variant.ALT[0]: return -1
 
     var ss = fai.get($variant.CHROM, s, e).toUpperAscii()
     var gc = count_gc(ss)

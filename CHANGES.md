@@ -1,3 +1,7 @@
+v0.0.8
+======
++ skip duphold calculation for distant or interchromosomal BND's
+
 v0.0.7
 ======
 + remove DHBZ for the z-score. this was less useful than the fold-change values.
