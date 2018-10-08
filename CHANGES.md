@@ -1,6 +1,7 @@
 v0.0.8
 ======
 + skip duphold calculation for distant or interchromosomal BND's
++ don't decode CRAM qname. This makes duphold use ~15% less CPU for CRAM
 
 v0.0.7
 ======

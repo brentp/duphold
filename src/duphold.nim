@@ -634,7 +634,7 @@ Options:
       quit "could not open bam file"
   if bam.idx == nil:
       quit "could not open bam index"
-  discard bam.set_option(FormatOption.CRAM_OPT_REQUIRED_FIELDS, 511)
+  discard bam.set_option(FormatOption.CRAM_OPT_REQUIRED_FIELDS, 510)
   sample_i = vcf.samples.find(bam.sample_name)
   if sample_i == -1:
       quit "couldn't find sample:" & bam.sample_name & " in vcf which had:" & join(vcf.samples, ",")
