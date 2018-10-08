@@ -3,37 +3,39 @@ import times
 import algorithm
 import random
 import strutils
+import logging
 import strformat
 import os
 import math
 import docopt
 import genoiser
 import ./dupholdpkg/version
+import ./dupholdpkg/bin_table
 
 const STEP = 200
 
-type MedianStats* = ref object
+type MedianStats* = object
   ## since we expect nearly all values to be < 1000
   ## we can store counts of observed values in a fixed-size array
   ## and get median (or any percentile) from those.
   ## we can even keep a moving window of medians as we can drop
   ## values by decrementing the counts.
   counts*: array[1000, int]
-  i_ok: bool
   i_median: int
+  i_ok: bool
   n*: int
 
-proc addm*(m:MedianStats, d:int, include_zero:bool) {.inline.} =
-    if d == 0 and (not include_zero):
+proc addm*(m:var MedianStats, d:int, include_zero:bool) {.inline.} =
+    if not include_zero and d == 0:
         return
-    m.i_ok = false
     if d > m.counts.high:
       m.counts[m.counts.high] += 1
     else:
       m.counts[d] += 1
     m.n += 1
+    m.i_ok = false
 
-proc dropm*(m:MedianStats, d:int, include_zero:bool) {.inline.} =
+proc dropm*(m:var MedianStats, d:int, include_zero:bool) {.inline.} =
     if d == 0 and (not include_zero):
         return
     m.i_ok = false
@@ -43,13 +45,13 @@ proc dropm*(m:MedianStats, d:int, include_zero:bool) {.inline.} =
       m.counts[d] -= 1
     m.n -= 1
 
-proc clear*(m:MedianStats) =
+proc clear*(m:var MedianStats) =
     zeroMem(m.counts[0].addr, sizeof(m.counts[0]) * m.counts.len)
     m.i_ok = false
     m.i_median = 0
     m.n = 0
 
-proc median*(m:MedianStats): int {.inline.} =
+proc median*(m:var MedianStats): int {.inline.} =
     if m.i_ok:
       return m.i_median
 
@@ -78,7 +80,7 @@ proc percentile*(m:MedianStats, pct:float64): int {.inline.} =
             return i
   return -1
 
-proc `$`(m:MedianStats): string =
+proc `$`(m:var MedianStats): string =
     return &"MedianStats(n:{m.n}, median:{m.median} vals: {m.counts[0..100]})"
 
 type Stats* = ref object
@@ -86,15 +88,11 @@ type Stats* = ref object
     mean*: float64
 
 proc addm*(s:var Stats, d:int, include_zero:bool) {.inline.} =
-    ## streaming mean, sd
-    ## https://dsp.stackexchange.com/questions/811/determining-the-mean-and-standard-deviation-in-real-time
+    ## streaming mean
     if (not include_zero) and d == 0:
         return
     s.n += 1
-    var mprev = s.mean
-    var df = d.float64
-    s.mean += (df - s.mean) / s.n.float64
-    #s.S += (df - s.mean) * (df - mprev)
+    s.mean += (d.float64 - s.mean) / s.n.float64
 
 proc dropm*(s:var Stats, d:int, include_zero:bool) {.inline.} =
     ## streaming mean, sd
@@ -144,34 +142,42 @@ proc find(targets:seq[Target], chrom:string): int =
         if t.name == chrom: return i
     return -1
 
-proc count_gc(s:string): float32 =
-    for c in s:
-        if c == 'C' or c == 'G':
-            result += 1
-    result /= s.len.float32
+{.push checks: off.}
+proc count_gc(gc: var seq[bool], s:int, e:int): float32 {.inline.} =
+    var tot = 0
+    for i in s..<e:
+        tot += gc[i].int
+    return tot.float32 / max(1, e - s).float32
 
-proc gc_content*(fai:Fai, chrom:string, step:int): seq[float32] =
-    var s = fai.get(chrom).toUpperAscii()
+proc gc_content*(fai:Fai, chrom:string, step:int, gc_bool: var seq[bool]): seq[float32] =
+    var s = fai.cget(chrom)
+    if gc_bool.len != s.len:
+        info("setting gc_bool length")
+        gc_bool.set_len(s.len)
+
     result = newSeq[float32]((s.len/step+1).int)
 
     for i, c in s:
-        if c == 'C' or c == 'G':
+        if c == 'C' or c == 'G' or c == 'c' or c == 'g':
             result[(i/step).int] += 1
-        elif c == 'N':
+            gc_bool[i] = true
+        elif c == 'N' or c == 'n':
             result[(i/step).int] -= 1
     for i, v in result:
         result[i] = v / step.float32
+    free(s)
     return result
+{.push checks: on.}
 
-proc get_or_empty[T](variant:Variant, field:string, input:var seq[T]) =
+proc get_or_empty[T](variant:Variant, field:string, input:var seq[T], nper:int=1) {.inline.} =
   ## if, for example we've already annotated a sample in the VCF with duphold
   ## we dont want to overwite those values with nan so try to grab existing
   ## values but otherwise make an empty array.
   if variant.format.get(field, input) == Status.OK:
       return
 
-  if input.len != variant.vcf.n_samples:
-    input.set_len(variant.vcf.n_samples)
+  if input.len != variant.vcf.n_samples * nper:
+    input.set_len(variant.vcf.n_samples * nper)
   for i, f in input:
     when T is float32:
         input[i] = cast[T](bcf_float_missing)
@@ -379,7 +385,7 @@ proc count(discordants:var seq[Discordant], s:int, e:int, i99:int, slop:int=25):
 proc get_bnd_mate_pos(variant:Variant): int {.inline.} =
     return get_bnd_mate_pos(variant.ALT[0], $variant.CHROM)
 
-proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var MedianStats, gc_stats:var seq[MedianStats], fai:Fai, w:int=7, cutoffs:seq[float64], discordants:var seq[Discordant], i99:int): float64 =
+proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var MedianStats, gc_stats:var seq[MedianStats], gc_bool:var seq[bool], w:int=7, cutoffs:seq[float64], discordants:var seq[Discordant], i99:int): float64 =
     ## sets FORMAT fields for sample i in the variant and returns the DHBFC value
     var
       s = variant.start
@@ -398,8 +404,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
         # skip distant BND's as this is not informative
         if ':' in variant.ALT[0]: return -1
 
-    var ss = fai.get($variant.CHROM, s, e).toUpperAscii()
-    var gc = count_gc(ss)
+    var gc = count_gc(gc_bool, s, e)
     var gci = (19 * gc).int
     var gc_stat = gc_stats[gci]
 
@@ -414,27 +419,16 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
     var floats = newSeq[float32](variant.vcf.n_samples)
 
     get_or_empty(variant, "DHFC", floats)
-    var fc = local_stats.median.float32 / stats.median.float32
-
-    #echo fc, " -> ", local_stats
-    #for k in 0..10:
-    #    var ss = rand(len(values) - 100000)
-    #    var ee = ss + (e - s)
-    #    var ls = MedianStats()
-    #    for i in (ss+1)..ee:
-    #        ls.addm(values[i], true)
-    #
-    #    #echo "sim (should be ~ 1):", ls.median.float32 / stats.median.float32
-
+    var fc = (local_stats.median / stats.median).float32
 
     floats[sample_i] = fc
     if variant.format.set("DHFC", floats) != Status.OK:
         quit "error setting DHFC in VCF"
 
     get_or_empty(variant, "DHBFC", floats)
-    var gfc = local_stats.median.float32 / gc_stat.median.float32
+    var gfc = (local_stats.median / gc_stat.median).float32
     result = gfc
-    floats[sample_i] = gfc.float32
+    floats[sample_i] = gfc
     if variant.format.set("DHBFC", floats) != Status.OK:
         quit "error setting DHBFC in VCF"
 
@@ -482,7 +476,7 @@ proc get_isize_distribution(bam:Bam, n:int=4000000, skip=500000): MedianStats =
             return
 
 iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Variant =
-  var depths : Fun[int16] = Fun[int16](values: newSeq[int16](), f:idepthfun)
+  var depths : Fun[int16] = Fun[int16](f:idepthfun)
   var
       targets = bam.hdr.targets
       target: Target
@@ -518,10 +512,11 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       #  discs.add(Discordant(left:(aln.stop.uint32 + cig[cig.len-1].len.uint32), right: aln.mate_pos.uint32))
 
   var iempty : Fun[int16] = Fun[int16](values:newSeq[int16](), f:ifun)
+  var gc_bool: seq[bool]
 
   for variant in vcf:
       if variant.CHROM == last_chrom:
-          discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai, cutoffs=dhd_cutoffs, w=w, discordants=discs, i99=i99)
+          discard variant.duphold(depths.values, sample_i, stats, gc_stats, gc_bool, cutoffs=dhd_cutoffs, w=w, discordants=discs, i99=i99)
 
           yield variant
           continue
@@ -537,21 +532,19 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
         start = 0
         i = targets.find(last_chrom)
 
-      depths.values.set_len(targets[i].length.int + 1)
-      zeroMem(depths.values[0].addr, depths.values.len * sizeof(depths.values[0]))
-
       if i == -1:
           yield variant
           continue
 
       target = targets[i]
+      depths.values = newSeq[int16](target.length.int + 1)
+      gc_bool = newSeq[bool](target.length.int)
+
+      info("starting read of bam values for chrom: " & target.name)
       discard genoiser[int16](bam, @[depths, iempty], target.name, 0, target.length.int)
+      info("finished reading:" & target.name & ". starting gc-content, discordant sorting, and gc cutoffs")
 
-      #var p = 25158703
-      #for i in (p-5..p+5):
-      #    echo i, " ",depths.values[i]
-
-      gc_count = fai.gc_content(last_chrom, step)
+      gc_count = fai.gc_content(last_chrom, step, gc_bool)
       depths.values.fill_stats(stats, gc_stats, gc_count, step, target.length.int)
 
       dhd_cutoffs = depths.values.find_fc_cutoffs(fdrs=(@[0.002, 0.0002]), w=w)
@@ -560,9 +553,104 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
               return a.right.int - b.right.int
           return a.left.int - b.left.int
       )
+      info("finished gc-content, sorting, and cutoffs")
 
-      discard variant.duphold(depths.values, sample_i, stats, gc_stats, fai, cutoffs=dhd_cutoffs, w=w, discordants=discs, i99=i99)
+      discard variant.duphold(depths.values, sample_i, stats, gc_stats, gc_bool, cutoffs=dhd_cutoffs, w=w, discordants=discs, i99=i99)
       yield variant
+
+type inner = tuple[left: int, right:int]
+
+proc innerCI(v:Variant): inner {.inline.} =
+    result = (v.start, v.stop)
+    var ci = newSeq[int32](2)
+    if v.info.get("CIPOS95", ci) == Status.OK:
+        result[0] += ci[1]
+        if v.info.get("CIEND95", ci) == Status.OK:
+            result[0] += ci[0]
+
+    if result[1] - result[0] < 10000: return
+    # for a longer variant, get a tighter bound
+
+    if v.info.get("CIPOS", ci) == Status.OK:
+        result[0] += ci[1]
+    if v.info.get("CIEND", ci) == Status.OK:
+        result[1] += ci[0]
+    if result[1] < result[0]:
+        result = (result[1], result[0])
+
+type snpset = ref object
+  starts: seq[int32]
+  nalts: seq[int8]
+  hetc: seq[int8]
+
+proc read(snps:VCF, chrom:string): snpset =
+  ## read all bi-allelic, high-quality snps into the snpset.
+  info("starting to read snps for chrom: " & chrom)
+  if snps.n_samples != 1:
+      quit "only works for 1 snp"
+  result = snpset(starts:newSeqOfCap[int32](8192), nalts:newSeqOfCap[int8](8192), hetc:newSeqOfCap[int8](8192))
+  var ad = newSeq[int32](2)
+  var gt = newSeq[int32](2)
+  for snv in snps.query(chrom):
+    if len(snv.REF) > 1 or len(snv.ALT) > 1 or len(snv.ALT[0]) > 1 or snv.QUAL < 20: continue
+    var gts = snv.format.genotypes(gt)[0]
+    var nalts = gts.alts
+
+    result.starts.add(snv.start.int32)
+    result.nalts.add(nalts)
+    if nalts == 1:
+      if snv.format.get("AD", ad) != Status.OK:
+        quit "expected AD field in snps VCF"
+      result.hetc.add(het_lookup(ad[0], ad[1], 13))
+    else:
+      result.hetc.add(-1)
+
+  info("done reading " & $result.starts.len & " bi-allelic snps for chrom: " & chrom)
+
+
+proc annotate*(snps:snpset, variant:Variant, sample_i:int) =
+    ## annotate a structural variant with the snps.
+    if len(snps.starts) == 0: return
+
+    # dont annotate BNDs (or INVs)
+    if ':' in variant.ALT[0] or variant.ALT[0] == "<INV>": return
+    var dhet = newSeq[int32](2 * variant.vcf.n_samples)
+    get_or_empty(variant, "DHET", dhet, 2)
+    dhet[2 * sample_i] = 0
+    dhet[2 * sample_i + 1] = 0
+
+    var dhhu = newSeq[int32](3 * variant.vcf.n_samples)
+    get_or_empty(variant, "DHHU", dhhu, 3)
+    dhhu[3 * sample_i] = 0
+    dhhu[3 * sample_i + 1] = 0
+    dhhu[3 * sample_i + 2] = 0
+
+    var ci = innerCI(variant)
+    var i = lowerBound(snps.starts, ci.left.int32, system.cmp)
+    var n = 0
+    while snps.starts[i] < ci.right:
+        # only compare diploid to triploid allele balance if this was called a HET.
+        if snps.nalts[i] == 1:
+          if snps.hetc[i] == 0: # diploid
+              dhet[2 * sample_i] += 1
+          elif snps.hetc[i] == 1: # triploid
+              dhet[2 * sample_i + 1] += 1
+
+        elif snps.nalts[i] == 0: # hom-ref
+            dhhu[3 * sample_i] += 1
+        elif snps.nalts[i] == 2: # hom-alt
+            dhhu[3 * sample_i + 1] += 1
+        elif snps.nalts[i] == -1: # unknown
+            dhhu[3 * sample_i + 2] += 1
+        i += 1
+        n += 1
+    if n == 0:
+        return
+
+    if variant.format.set("DHET", dhet) != Status.OK:
+        quit "error setting DHET in VCF"
+    if variant.format.set("DHHU", dhhu) != Status.OK:
+        quit "error setting DHHU in VCF"
 
 proc sample_name(b:Bam): string =
     for line in ($b.hdr).split("\n"):
@@ -574,6 +662,8 @@ proc sample_name(b:Bam): string =
 
 
 proc main(argv: seq[string]) =
+  var L = newConsoleLogger(fmtStr=verboseFmtStr)
+  addHandler(L)
 
   let doc = format("""
   version: $version
@@ -581,9 +671,10 @@ proc main(argv: seq[string]) =
   Usage: duphold [options]
 
 Options:
-  -v --vcf <path>           path to sorted VCF/BCF
+  -v --vcf <path>           path to sorted SV VCF/BCF
   -b --bam <path>           path to indexed BAM/CRAM
   -f --fasta <path>         indexed fasta reference.
+  -s --snp <path>           optional path to snp/indel VCF with which to annotate SVs.
   -t --threads <int>        number of decompression threads. [default: 4]
   -o --output <string>      output VCF/BCF (default is VCF to stdout) [default: -]
   -d --drop                 drop all samples from a multi-sample --vcf *except* the sample in --bam. useful for parallelization by sample followed by merge.
@@ -597,6 +688,7 @@ Options:
     bam:Bam
     ovcf:VCF
     sample_i: int
+    snps:VCF
 
   if $args["--fasta"] == "nil":
     echo doc
@@ -616,6 +708,10 @@ Options:
   if not open(ovcf, $args["--output"], mode="w"):
     quit "unable to open output vcf"
 
+  var threads = parseInt($args["--threads"])
+  if $args["--snp"] != "nil" and not open(snps, $args["--snp"], threads=threads):
+      quit "couldn't open snp VCF at:" & $args["--snp"]
+
   if vcf.header.add_info("GCF", "1", "Float", "GC-content fraction for the variant region betwee 0 and 1.") != Status.OK:
       quit "unable to add to header"
   #if vcf.header.add_format("DHZ", "1", "Float", "duphold z-score for depth") != Status.OK:
@@ -623,13 +719,18 @@ Options:
   if vcf.header.add_format("DHFC", "1", "Float", "duphold depth fold-change") != Status.OK:
       quit "unable to add to header"
   if vcf.header.add_format("DHBFC", "1", "Float", "duphold depth fold-change compared to bins with matching GC") != Status.OK:
-      quit "unable to add to header"
+      quit "unable to add to DHBFC header"
   if vcf.header.add_format("DHD", "1", "Integer", "duphold rapid change in depth at one of the break-points (1 for higher. 0 for no or conflicting changes. -1 for drop, 2 for both break points)") != Status.OK:
-      quit "unable to add to header"
+      quit "unable to add DHD to header"
   if vcf.header.add_format("DHSP", "1", "Integer", "duphold count of spanning read-pairs") != Status.OK:
-      quit "unable DHSP to add to header"
+      quit "unable to add DHSP to header"
 
-  open(bam, $args["--bam"], index=true, threads=parseInt($args["--threads"]), fai=($args["--fasta"]))
+  if snps != nil and vcf.header.add_format("DHET", "2", "Integer", "duphold count of SNP heterozygotes in the event supporting: a normal heterozygote, a triploid heterozygote") != Status.OK:
+      quit "unable DHET to add to header"
+  if snps != nil and vcf.header.add_format("DHHU", "3", "Integer", "count of hom-ref, hom-alt, unknown SNP variants in the event") != Status.OK:
+      quit "unable DHUU to add to header"
+
+  open(bam, $args["--bam"], index=true, threads=threads, fai=($args["--fasta"]))
   if bam == nil:
       quit "could not open bam file"
   if bam.idx == nil:
@@ -643,10 +744,23 @@ Options:
     sample_i = 0
   ovcf.header = vcf.header
 
+  if snps != nil:
+    if snps.samples.find(bam.sample_name) == -1:
+      quit "couldn't find sample:" & bam.sample_name & " in snps vcf which had:" & join(snps.samples, ",")
+    snps.set_samples(@[bam.sample_name])
+
   if not ovcf.write_header():
       quit "couldn't write vcf header"
 
+  var last_chrom = "".cstring
+  var snpst: snpset
   for variant in bam.duphold(vcf, fai, sample_i):
+      if snps != nil:
+          if last_chrom != variant.CHROM:
+            snpst = snps.read($variant.CHROM)
+            last_chrom = variant.CHROM
+
+          snpst.annotate(variant, sample_i)
       if not ovcf.write_variant(variant):
           quit "couldn't write variant"
 
@@ -654,7 +768,6 @@ Options:
   vcf.close()
   bam.close()
 
-  GC_FullCollect()
-
 when isMainModule:
     main(commandLineParams())
+
