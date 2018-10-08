@@ -7,6 +7,9 @@ This tool is a fast way to add depth information to those calls. This can be use
 information for filtering variants; for example **we will be skeptical of deletion calls that
 do not have lower than average coverage** compared to regions with similar gc-content.
 
+In addition, `duphold` will annotate the SV vcf with information from a SNP/Indel VCF. For example, **we will not
+believe a large deletion that has many heterozygote SNP calls**.
+
 
 `duphold` takes a **bam/cram**, a **VCF/BCF** of SV calls, and a **fasta** reference and it updates the FORMAT field for a
 single sample with:
@@ -14,6 +17,15 @@ single sample with:
 + **DHFC**: fold-change for the variant depth *relative to the rest of the chromosome* the variant was found on
 + **DHBFC**: fold-change for the variant depth *relative to bins in the genome with similar GC-content*.
 + **DHD**: rapid change in depth at one of the break-points (1 for higher (DUP). 0 for no or conflicting changes. -1 for drop (DUP), 2 or -2 for both break points)
+
+If a SNP/Indel VCF is given, `duphold` will annotate each DEL/DUP call with:
+
++ **DHET**: counts of SNP heterozygotes in the SV supporting: [0] a normal heterozygote, [1] a triploid heterozygote.
+            for a DUP, we expect most hets to have an allele balance closer to 0.33 or 0.67 than to 0.5. A good heterozygous
+            DUP will have larger values of [1], than [0], though it's possible there are no HETs in small events.
+
++ **DHHU**: counts of [0] Hom-ref, [1] Hom-alt, [2] Unknown variants in the event. A heterozygous deletion may have more hom-alt SNP calls.
+            A homozygous deletion may have only unknown SNP calls.
 
 It also adds **GCF** to the INFO field indicating the fraction of G or C bases in the variant.
 
