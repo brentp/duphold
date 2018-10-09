@@ -18,7 +18,7 @@ license       = "MIT"
 
 # Dependencies
 
-requires "genoiser >= 0.2.2", "hts >= 0.2.6",  "docopt#0abba63"
+requires "hts >= 0.2.6", "genoiser >= 0.2.2",  "docopt#0abba63"
 srcDir = "src"
 installExt = @["nim"]
 
