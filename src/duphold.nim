@@ -128,21 +128,11 @@ type Discordant* = ref object
 proc `$`*(d:Discordant): string =
     return &"Discordant(left: {d.left}, right: {d.right}"
 
-proc idepthfun*(aln:Record, posns:var seq[mrange]) =
-  ## depthfun is an example of a `fun` that can be sent to `genoiser`.
-  ## it sets reports the depth at each position
-  if aln.mapping_quality == 0: return
-  var f = aln.flag
-  if f.unmapped or f.secondary or f.qcfail or f.dup: return
-  #refposns(aln, posns)
-  posns.add((aln.start, aln.stop, 1))
-
 proc find(targets:seq[Target], chrom:string): int =
     for i, t in targets:
         if t.name == chrom: return i
     return -1
 
-{.push checks: off.}
 proc count_gc(gc: var seq[bool], s:int, e:int): float32 {.inline.} =
     var tot = 0
     for i in s..<e:
@@ -167,7 +157,6 @@ proc gc_content*(fai:Fai, chrom:string, step:int, gc_bool: var seq[bool]): seq[f
         result[i] = v / step.float32
     free(s)
     return result
-{.push checks: on.}
 
 proc get_or_empty[T](variant:Variant, field:string, input:var seq[T], nper:int=1) {.inline.} =
   ## if, for example we've already annotated a sample in the VCF with duphold
@@ -476,7 +465,6 @@ proc get_isize_distribution(bam:Bam, n:int=4000000, skip=500000): MedianStats =
             return
 
 iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Variant =
-  var depths : Fun[int16] = Fun[int16](f:idepthfun)
   var
       targets = bam.hdr.targets
       target: Target
@@ -502,16 +490,19 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
           return
       var f = aln.flag
       if f.unmapped or f.secondary or f.qcfail or f.dup: return
-      if aln.stop >= aln.mate_pos: return
+      var stop = aln.stop
+      posns.add((aln.start, stop, 1))
+
       if aln.isize < i95: return
       if aln.isize > 50000000: return
+      if stop >= aln.mate_pos: return
       #var cig = aln.cigar
       #if cig[cig.len-1].op != CigarOp(soft_clip):
       discs.add(Discordant(left:aln.stop.uint32, right: aln.mate_pos.uint32))
       #else:
       #  discs.add(Discordant(left:(aln.stop.uint32 + cig[cig.len-1].len.uint32), right: aln.mate_pos.uint32))
 
-  var iempty : Fun[int16] = Fun[int16](values:newSeq[int16](), f:ifun)
+  var depths : Fun[int16] = Fun[int16](f:ifun)
   var gc_bool: seq[bool]
 
   for variant in vcf:
@@ -541,7 +532,7 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       gc_bool = newSeq[bool](target.length.int)
 
       info("starting read of bam values for chrom: " & target.name)
-      discard genoiser[int16](bam, @[depths, iempty], target.name, 0, target.length.int)
+      discard genoiser[int16](bam, @[depths], target.name, 0, target.length.int)
       info("finished reading:" & target.name & ". starting gc-content, discordant sorting, and gc cutoffs")
 
       gc_count = fai.gc_content(last_chrom, step, gc_bool)
@@ -767,6 +758,8 @@ Options:
   ovcf.close()
   vcf.close()
   bam.close()
+  if snps != nil:
+    snps.close()
 
 when isMainModule:
     main(commandLineParams())
