@@ -665,7 +665,7 @@ Options:
   -v --vcf <path>           path to sorted SV VCF/BCF
   -b --bam <path>           path to indexed BAM/CRAM
   -f --fasta <path>         indexed fasta reference.
-  -s --snp <path>           optional path to snp/indel VCF with which to annotate SVs.
+  -s --snp <path>           optional path to snp/indel VCF/BCF with which to annotate SVs. BCF is highly recommended as it's much faster to parse.
   -t --threads <int>        number of decompression threads. [default: 4]
   -o --output <string>      output VCF/BCF (default is VCF to stdout) [default: -]
   -d --drop                 drop all samples from a multi-sample --vcf *except* the sample in --bam. useful for parallelization by sample followed by merge.

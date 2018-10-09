@@ -18,7 +18,7 @@ single sample with:
 + **DHBFC**: fold-change for the variant depth *relative to bins in the genome with similar GC-content*.
 + **DHD**: rapid change in depth at one of the break-points (1 for higher (DUP). 0 for no or conflicting changes. -1 for drop (DUP), 2 or -2 for both break points)
 
-If a SNP/Indel VCF is given, `duphold` will annotate each DEL/DUP call with:
+If a SNP/Indel VCF/BCF is given, `duphold` will annotate each DEL/DUP call with (see below for more detail on what it does):
 
 + **DHET**: counts of SNP heterozygotes in the SV supporting: [0] a normal heterozygote, [1] a triploid heterozygote.
             for a DUP, we expect most hets to have an allele balance closer to 0.33 or 0.67 than to 0.5. A good heterozygous
@@ -28,6 +28,20 @@ If a SNP/Indel VCF is given, `duphold` will annotate each DEL/DUP call with:
             A homozygous deletion may have only unknown SNP calls.
 
 It also adds **GCF** to the INFO field indicating the fraction of G or C bases in the variant.
+
+
+## SNP/Indel annotation
+
+**NOTE** it is strongly recommended to use BCF for the `--snp` argument as otherwise VCF parsing will be a bottleneck.
+
++ A DEL call with many HETs is unlikely to be valid.
++ A DUP call that has many HETs that have a 0.5 allele balance is unlikely to be valid.
+
+When the user specifies a `--snp` VCF, `duphold` finds the appropriate sample in that file and extracts high (> 20) quality, bi-allelic
+SNP calls. For each chromosome, it will store a minimal (low-memory representation) in a sorted data-structure for fast access. It will
+then query this data structure for each SV and count the number of heterozygotes supporting a diploid HET (allele balance close to 0.5)
+or a triploid HET (allele balance close to 0.33 or 0.67) into `DHET`. It will store the number of Hom-Ref, Hom-Alt, Unnkown calls in
+`DHHU`.
 
 ## Performance
 
@@ -48,9 +62,12 @@ coming soon.
 ## Usage
 
 ```
-duphold -t 4 -v $svvcf -b $cram -f $fasta -o $output.bcf
-duphold --threads 4 --vcf $svvcf --bam $cram --fasta $fasta --output $output.bcf
+duphold -s $gatk_vcf -t 4 -v $svvcf -b $cram -f $fasta -o $output.bcf
+duphold --snp $gatk_bcf --threads 4 --vcf $svvcf --bam $cram --fasta $fasta --output $output.bcf
 ```
+
+`--snp` can be a multi-sample VCF/BCF. `duphold` will be much faster with a BCF, especially if
+the snp/indel file contains many (>20 or so) samples.
 
 the threads are decompression threads so increasing up to about 4 works.
 

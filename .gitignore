@@ -2,3 +2,7 @@
 data/
 *.bcf
 src/duphold
+*.bam*
+*.cram*
+syndip/
+*.vcf*
