@@ -2,6 +2,7 @@ v0.0.8
 ======
 + skip duphold calculation for distant or interchromosomal BND's
 + don't decode CRAM qname. This makes duphold use ~15% less CPU for CRAM
++ allow annotating SVs with SNP calls as a additional validation of each event.
 
 v0.0.7
 ======
