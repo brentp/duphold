@@ -16,6 +16,7 @@ single sample with:
 
 + **DHFC**: fold-change for the variant depth *relative to the rest of the chromosome* the variant was found on
 + **DHBFC**: fold-change for the variant depth *relative to bins in the genome with similar GC-content*.
++ **DHFFC**: fold-change for the variant depth *relative to **F**lanking regions*.
 
 If a SNP/Indel VCF/BCF is given, `duphold` will annotate each DEL/DUP call with (see below for more detail on what it does):
 
