@@ -251,6 +251,8 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
     if variant.format.set("DHBFC", floats) != Status.OK:
         quit "error setting DHBFC in VCF"
 
+    if discordants.len == 0: return
+
     if variant.ALT[0] == "<DEL>" or (variant.ALT[0] != "<" and len(variant.REF) > len(variant.ALT[0])):
       var ints = newSeq[int32](variant.vcf.n_samples)
       get_or_empty(variant, "DHSP", ints)
@@ -278,8 +280,15 @@ proc fill_stats*[T](depths: var seq[T], stats:var MedianStats, gc_stats:var seq[
 proc get_isize_distribution(bam:Bam, n:int=4000000, skip=500000): MedianStats =
     result = MedianStats()
     var k = 0
+    var mates = false
     for aln in bam:
+        if aln.mate_pos != -1:
+            mates = true
+
         k += 1
+        if k > 10000 and not mates:
+            info("no mates found. assuming single end reads")
+            return
         if k < skip: continue
 
         if aln.mapping_quality == 0: continue
@@ -309,13 +318,28 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
   var i95 = id.percentile(95)
   var i99 = id.percentile(99)
   var discs = newSeqOfCap[Discordant](16384)
+
   proc ifun(aln:Record, posns: var seq[mrange]) =
       if aln.mapping_quality == 0:
           return
       var f = aln.flag
       if f.unmapped or f.secondary or f.qcfail or f.dup: return
       var stop = aln.stop
-      posns.add((aln.start, stop, 1))
+      if stop - aln.start < 500:
+        posns.add((aln.start, stop, 1))
+      else: # for long reads, we actually parse the cigar.
+        var pos = aln.start
+        for op in aln.cigar:
+          var c = op.consumes
+          if not c.reference: continue
+
+          if c.query:
+            if len(posns) == 0 or pos != posns[len(posns)-1].stop:
+              # for this function, we want the span of the event so we increment start .. stop.$
+              posns.add((pos, pos+op.len, 1))
+            else:
+              posns[len(posns)-1].stop = pos + op.len
+          pos += op.len
 
       if aln.isize < i95: return
       if aln.isize > 50000000: return

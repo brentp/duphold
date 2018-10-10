@@ -1,3 +1,8 @@
+v0.0.9 (dev)
+============
++ add DHFFC for (F)lank fold change. 
++ make changes to support long, single-end reads.
+
 v0.0.8
 ======
 + skip duphold calculation for distant or interchromosomal BND's
