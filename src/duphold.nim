@@ -20,12 +20,12 @@ type MedianStats* = object
   ## and get median (or any percentile) from those.
   ## we can even keep a moving window of medians as we can drop
   ## values by decrementing the counts.
-  counts*: array[1000, int]
+  counts*: array[512, int]
   i_median: int
   n*: int
   i_ok: bool
 
-proc addm*(m:var MedianStats, d:int, include_zero:bool) {.inline.} =
+proc add*(m:var MedianStats, d:int, include_zero:bool) {.inline.} =
     if not include_zero and d == 0:
         return
     if d < m.counts.high:
@@ -35,7 +35,7 @@ proc addm*(m:var MedianStats, d:int, include_zero:bool) {.inline.} =
     m.n += 1
     m.i_ok = false
 
-proc dropm*(m:var MedianStats, d:int, include_zero:bool) {.inline.} =
+proc drop*(m:var MedianStats, d:int, include_zero:bool) {.inline.} =
     if d == 0 and (not include_zero):
         return
     if d < m.counts.high:
@@ -58,6 +58,11 @@ proc median*(m:var MedianStats): int {.inline.} =
             m.i_ok = true
             break
     return m.i_median
+
+proc mean*(m:var MedianStats): int {.inline.} =
+    for i, cnt in m.counts:
+        result += (i * cnt)
+    result = int(0.5 + result.float64 / m.n.float64)
 
 proc clear*(m:var MedianStats) =
     zeroMem(m.counts[0].addr, sizeof(m.counts[0]) * m.counts.len)
@@ -82,12 +87,6 @@ proc percentile*(m:MedianStats, pct:float64): int {.inline.} =
 
 proc `$`(m:var MedianStats): string =
     return &"MedianStats(n:{m.n}, median:{m.median} vals: {m.counts[0..100]})"
-
-proc fc*(a:var MedianStats, b:var MedianStats): float64 {.inline.} =
-    ## fold-change of a relative to b so that value is always > 1.
-    if a.median > b.median:
-      return a.median / b.median
-    return -b.median / a.median
 
 type Discordant* = ref object
   left*: uint32
@@ -213,7 +212,18 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
 
     var local_stats = MedianStats()
     for i in (s+1)..e:
-        local_stats.addm(values[i], true)
+        local_stats.add(values[i], true)
+
+    # look left and right up to $size bases.
+    # also offset by `off` bases to avoid sketchiness near event bounds.
+    var
+      flank_stats = MedianStats()
+      off = 20
+      size = 5000
+    for i in max(0, s - size - off)..(s - off):
+      flank_stats.add(values[i], true)
+    for i in (e + off)..min(e + size + off, values.high):
+      flank_stats.add(values[i], true)
 
     var tmp = @[gc]
     if variant.info.set("GCF", tmp) != Status.OK:
@@ -223,10 +233,16 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
 
     get_or_empty(variant, "DHFC", floats)
     var fc = (local_stats.median / stats.median).float32
-
     floats[sample_i] = fc
     if variant.format.set("DHFC", floats) != Status.OK:
         quit "error setting DHFC in VCF"
+
+    get_or_empty(variant, "DHFFC", floats)
+    var ffc = (local_stats.median / flank_stats.median).float32
+    floats[sample_i] = ffc
+    if variant.format.set("DHFFC", floats) != Status.OK:
+        quit "error setting DHFFC in VCF"
+
 
     get_or_empty(variant, "DHBFC", floats)
     var gfc = (local_stats.median / gc_stat.median).float32
@@ -245,7 +261,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
 proc fill_stats*[T](depths: var seq[T], stats:var MedianStats, gc_stats:var seq[MedianStats], gc_count:var seq[float32], step:int, target_length:int) =
   stats.clear()
   for v in depths:
-    stats.addm(v, true)
+    stats.add(v, true)
 
   # for each window of length step, gc_count holds the proportion of bases that were G or C
   # now, for each window, we determine the gc bin (multiply by 20 to get the i) and update the
@@ -257,7 +273,7 @@ proc fill_stats*[T](depths: var seq[T], stats:var MedianStats, gc_stats:var seq[
       var gci = (19 * gc_count[wi]).int
       # get the correct stat for the gc in this window and update it.
       for i in w0..<(w0 + step):
-          gc_stats[gci].addm(depths[i], true)
+          gc_stats[gci].add(depths[i], true)
 
 proc get_isize_distribution(bam:Bam, n:int=4000000, skip=500000): MedianStats =
     result = MedianStats()
@@ -269,7 +285,7 @@ proc get_isize_distribution(bam:Bam, n:int=4000000, skip=500000): MedianStats =
         if aln.mapping_quality == 0: continue
         #if not aln.flag.proper_pair: continue
         if aln.stop >= aln.mate_pos: continue
-        result.addm(aln.isize.abs, true)
+        result.add(aln.isize.abs, true)
         if result.n == n:
             return
 
@@ -518,6 +534,8 @@ Options:
       quit "unable to add to header"
   if vcf.header.add_format("DHBFC", "1", "Float", "duphold depth fold-change compared to bins with matching GC") != Status.OK:
       quit "unable to add to DHBFC header"
+  if vcf.header.add_format("DHFFC", "1", "Float", "duphold depth flank fold-change compared 1KB left and right of event") != Status.OK:
+      quit "unable to add to DHFFC header"
   if vcf.header.add_format("DHSP", "1", "Integer", "duphold count of spanning read-pairs") != Status.OK:
       quit "unable to add DHSP to header"
 
