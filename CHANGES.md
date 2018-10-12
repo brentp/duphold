@@ -2,6 +2,7 @@ v0.0.9 (dev)
 ============
 + add DHFFC for (F)lank fold change. 
 + make changes to support long, single-end reads.
++ fix bug in hts-nim that made duphold grab the wrong sample info from a SNP BCF (not vcf)
 
 v0.0.8
 ======
