@@ -51,7 +51,21 @@ or a triploid HET (allele balance close to 0.33 or 0.67) into `DHET`. It will st
 
 ### Accuracy
 
-coming soon.
+Evaluting on the [genome in a bottle truthset](ftp://ftp-trace.ncbi.nlm.nih.gov/giab/ftp/data/AshkenazimTrio/analysis/NIST_SVs_Integration_v0.6/HG002_SVs_Tier1_v0.6.vcf.gz) for *DEL calls larger than 300 bp*:
+
+| method      |       FDR |   FN |   FP |   TP-call |   precision |   recall |   recall-% |     FP-% |
+|:------------|----------:|-----:|-----:|----------:|------------:|---------:|-----------:|---------:|
+| unfiltered  | 0.0543616 |  276 |   86 |      1496 |    0.945638 | 0.844244 |   100      | 100      |
+| DHBFC < 0.7 | 0.017988  |  298 |   27 |      1474 |    0.982012 | 0.831828 |    98.5294 |  31.3953 |
+| DHFFC < 0.7 | 0.0211221 |  289 |   32 |      1483 |    0.978878 | 0.836907 |    99.131  |  37.2093 |
+
+Note that filtering on `DHFFC < 0.7` **retains  99.1% of true positives** and **removes  62.8% (100 - 37.2) of false positives**
+
+This was generated using [truvari.py](https://github.com/spiralgenetics/truvari) with the command:
+```
+truvari.py --sizemax 15000000 -s 300 -S 270 -b HG002_SVs_Tier1_v0.6.DEL.vcf.gz -c $dupholded_vcf -o $out \
+   --passonly --pctsim=0  -r 20 --giabreport -f $fasta --no-ref --includebed HG002_SVs_Tier1_v0.6.bed -O 0.6
+```
 
 ## Install
 
