@@ -68,6 +68,19 @@ truvari.py --sizemax 15000000 -s 300 -S 270 -b HG002_SVs_Tier1_v0.6.DEL.vcf.gz -
    --passonly --pctsim=0  -r 20 --giabreport -f $fasta --no-ref --includebed HG002_SVs_Tier1_v0.6.bed -O 0.6
 ```
 
+For **deletions >= 1KB**, duphold does even better:
+
+| method      |   FDR |   FN |   FP |   TP-call |   precision |   recall |   recall-% |    FP-% |
+|:------------|------:|-----:|-----:|----------:|------------:|---------:|-----------:|--------:|
+| unfiltered  | 0.073 |   46 |   38 |       486 |       0.927 |    0.914 |    100.000 | 100.000 |
+| DHBFC < 0.7 | 0.012 |   54 |    6 |       478 |       0.988 |    0.898 |     98.354 |  15.789 |
+| DHFFC < 0.7 | 0.012 |   53 |    6 |       479 |       0.988 |    0.900 |     98.560 |  15.789 |
+
+Note that filtering on `DHFFC < 0.7` **retains 98.5% of DEL calls that are also in the truth-set (TPs)** and
+**removes 84.2% (100 - 15.8) of calls not in the truth-set (FPs)**
+
+The `truvari.py` command used for this is the same as above except for: `-s 1000 -S 970`
+
 ## Install
 
 `duphold` is distributed as a binary [here](https://github.com/brentp/duphold/releases/latest) and requires libhts.so in standard locations or indicated with `LD_LIBRARY_PATH`.
