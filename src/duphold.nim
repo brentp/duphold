@@ -20,14 +20,12 @@ type MedianStats* = object
   ## and get median (or any percentile) from those.
   ## we can even keep a moving window of medians as we can drop
   ## values by decrementing the counts.
-  counts*: array[512, int]
+  counts*: array[4096, int]
   i_median: int
   n*: int
   i_ok: bool
 
-proc add*(m:var MedianStats, d:int, include_zero:bool) {.inline.} =
-    if not include_zero and d == 0:
-        return
+proc add*(m:var MedianStats, d:int) {.inline.} =
     if d < m.counts.high:
       m.counts[d] += 1
     else:
@@ -35,9 +33,7 @@ proc add*(m:var MedianStats, d:int, include_zero:bool) {.inline.} =
     m.n += 1
     m.i_ok = false
 
-proc drop*(m:var MedianStats, d:int, include_zero:bool) {.inline.} =
-    if d == 0 and (not include_zero):
-        return
+proc drop*(m:var MedianStats, d:int) {.inline.} =
     if d < m.counts.high:
       m.counts[d] -= 1
     else:
@@ -45,13 +41,17 @@ proc drop*(m:var MedianStats, d:int, include_zero:bool) {.inline.} =
     m.n -= 1
     m.i_ok = false
 
-proc median*(m:var MedianStats): int {.inline.} =
+proc median*(m:var MedianStats, skip_zeros:bool=false): int {.inline.} =
     if m.i_ok:
       return m.i_median
 
     var cum = 0
     var stop_n = (0.5 + m.n.float64 * 0.5).int
+    if skip_zeros:
+      stop_n = (0.5 + float64(m.n - m.counts[0]) * 0.5).int
+
     for i, cnt in m.counts:
+        if skip_zeros and i == 0: continue
         cum += cnt
         if cum >= stop_n:
             m.i_median = i
@@ -107,7 +107,10 @@ proc count_gc(gc: var seq[bool], s:int, e:int): float32 {.inline.} =
     return tot.float32 / max(1, e - s).float32
 
 proc gc_content*(fai:Fai, chrom:string, step:int, gc_bool: var seq[bool]): seq[float32] =
+
     var s = fai.cget(chrom)
+    defer:
+        free(s)
     if gc_bool.len != s.len:
         info("setting gc_bool length")
         gc_bool.set_len(s.len)
@@ -122,8 +125,6 @@ proc gc_content*(fai:Fai, chrom:string, step:int, gc_bool: var seq[bool]): seq[f
             result[(i/step).int] -= 1
     for i, v in result:
         result[i] = v / step.float32
-    free(s)
-    return result
 
 proc get_or_empty[T](variant:Variant, field:string, input:var seq[T], nper:int=1) {.inline.} =
   ## if, for example we've already annotated a sample in the VCF with duphold
@@ -212,7 +213,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
 
     var local_stats = MedianStats()
     for i in (s+1)..e:
-        local_stats.add(values[i], true)
+        local_stats.add(values[i])
 
     # look left and right up to $size bases.
     # also offset by `off` bases to avoid sketchiness near event bounds.
@@ -221,9 +222,9 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
       off = 20
       size = 5000
     for i in max(0, s - size - off)..(s - off):
-      flank_stats.add(values[i], true)
+      flank_stats.add(values[i])
     for i in (e + off)..min(e + size + off, values.high):
-      flank_stats.add(values[i], true)
+      flank_stats.add(values[i])
 
     var tmp = @[gc]
     if variant.info.set("GCF", tmp) != Status.OK:
@@ -263,7 +264,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
 proc fill_stats*[T](depths: var seq[T], stats:var MedianStats, gc_stats:var seq[MedianStats], gc_count:var seq[float32], step:int, target_length:int) =
   stats.clear()
   for v in depths:
-    stats.add(v, true)
+    stats.add(v)
 
   # for each window of length step, gc_count holds the proportion of bases that were G or C
   # now, for each window, we determine the gc bin (multiply by 20 to get the i) and update the
@@ -275,9 +276,9 @@ proc fill_stats*[T](depths: var seq[T], stats:var MedianStats, gc_stats:var seq[
       var gci = (19 * gc_count[wi]).int
       # get the correct stat for the gc in this window and update it.
       for i in w0..<(w0 + step):
-          gc_stats[gci].add(depths[i], true)
+          gc_stats[gci].add(depths[i])
 
-proc get_isize_distribution(bam:Bam, n:int=4000000, skip=500000): MedianStats =
+proc get_isize_distribution*(bam:Bam, n:int=5_000_000, skip=1_500_000): MedianStats =
     result = MedianStats()
     var k = 0
     var mates = false
@@ -293,8 +294,8 @@ proc get_isize_distribution(bam:Bam, n:int=4000000, skip=500000): MedianStats =
 
         if aln.mapping_quality == 0: continue
         #if not aln.flag.proper_pair: continue
-        if aln.stop >= aln.mate_pos: continue
-        result.add(aln.isize.abs, true)
+        if aln.start > aln.mate_pos or aln.isize <= 0: continue
+        result.add(max(0, aln.isize))
         if result.n == n:
             return
 
@@ -315,7 +316,6 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
   # but we use a more stringent i99 to decide what's normal when we check
   # for read-pairs that a deletion--this actually ends up making more pairs
   # support the deletion.
-  var i95 = id.percentile(95)
   var i99 = id.percentile(99)
   var discs = newSeqOfCap[Discordant](16384)
 
@@ -341,9 +341,9 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
               posns[len(posns)-1].stop = pos + op.len
           pos += op.len
 
-      if aln.isize < i95: return
-      if aln.isize > 50000000: return
+      if aln.isize < i99: return
       if stop >= aln.mate_pos: return
+      if aln.tid != aln.mate_tid: return
       #var cig = aln.cigar
       #if cig[cig.len-1].op != CigarOp(soft_clip):
       discs.add(Discordant(left:aln.stop.uint32, right: aln.mate_pos.uint32))
@@ -376,10 +376,13 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
           continue
 
       target = targets[i]
-      depths.values = newSeq[int16](target.length.int + 1)
-      gc_bool = newSeq[bool](target.length.int)
+      depths.values.setLen(target.length.int + 1)
+      gc_bool.setLen(target.length.int)
+      discs.setLen(0)
+      GC_fullCollect()
 
       info("starting read of bam values for chrom: " & target.name)
+      var t = cpuTime()
       discard genoiser[int16](bam, @[depths], target.name, 0, target.length.int)
       info("finished reading:" & target.name & ". starting gc-content, discordant sorting")
 

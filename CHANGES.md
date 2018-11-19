@@ -1,5 +1,9 @@
-v0.0.9 (dev)
-============
+v0.1.0
+======
++ reduce memory usage in discordant calculation.
+
+v0.0.9
+======
 + drop DHD in favor of DHFFC for (F)lank fold change. 
 + make changes to support long, single-end reads.
 + fix bug in hts-nim that made duphold grab the wrong sample info from a SNP BCF (not vcf)
