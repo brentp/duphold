@@ -20,7 +20,7 @@ type MedianStats* = object
   ## and get median (or any percentile) from those.
   ## we can even keep a moving window of medians as we can drop
   ## values by decrementing the counts.
-  counts*: array[4096, int]
+  counts*: array[16384, int]
   i_median: int
   n*: int
   i_ok: bool
@@ -215,6 +215,9 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
     for i in (s+1)..e:
         local_stats.add(values[i])
 
+    info("local median:", local_stats.median)
+    info("median:", stats.median)
+
     # look left and right up to $size bases.
     # also offset by `off` bases to avoid sketchiness near event bounds.
     var
@@ -226,6 +229,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
     for i in (e + off)..min(e + size + off, values.high):
       flank_stats.add(values[i])
 
+    info("flank:", flank_stats.median)
     var tmp = @[gc]
     if variant.info.set("GCF", tmp) != Status.OK:
         quit "couldn't set GCF"
@@ -264,6 +268,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
 proc fill_stats*[T](depths: var seq[T], stats:var MedianStats, gc_stats:var seq[MedianStats], gc_count:var seq[float32], step:int, target_length:int) =
   stats.clear()
   for v in depths:
+    if v == 0: continue
     stats.add(v)
 
   # for each window of length step, gc_count holds the proportion of bases that were G or C
@@ -276,6 +281,7 @@ proc fill_stats*[T](depths: var seq[T], stats:var MedianStats, gc_stats:var seq[
       var gci = (19 * gc_count[wi]).int
       # get the correct stat for the gc in this window and update it.
       for i in w0..<(w0 + step):
+          if depths[i] == 0: continue
           gc_stats[gci].add(depths[i])
 
 proc get_isize_distribution*(bam:Bam, n:int=5_000_000, skip=1_500_000): MedianStats =
@@ -377,7 +383,9 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
 
       target = targets[i]
       depths.values.setLen(target.length.int + 1)
+      zeroMem(depths.values[0].addr, depths.values.len * depths.values[0].sizeof)
       gc_bool.setLen(target.length.int)
+      zeroMem(gc_bool[0].addr, gc_bool.len * gc_bool[0].sizeof)
       discs.setLen(0)
       GC_fullCollect()
 
