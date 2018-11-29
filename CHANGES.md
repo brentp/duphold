@@ -1,3 +1,10 @@
+v0.1.1
+======
++ fix bug when later chroms had larger values (see: 9f88400 and thanks @raul-w for reporting and providing a test-case).
++ adjust calculation of global and per-gc bin coverage to use only non-zero bases. this improves the ratio when comparing
+  to the depth inside of events (which will still count zero-coverage bases) in chromosomes with sparse coverage. (thanks @raul-w
+  for suggesting).
+
 v0.1.0
 ======
 + reduce memory usage in discordant calculation.
