@@ -29,6 +29,13 @@ If a SNP/Indel VCF/BCF is given, `duphold` will annotate each DEL/DUP call with 
 
 It also adds **GCF** to the INFO field indicating the fraction of G or C bases in the variant.
 
+After annotating with `duphold`, a sensible way to filter to high-quality variants is:
+
+```
+bcftools view -i '(SVTYPE = "DEL" & FMT/DHFFC[0] < 0.7) | (SVTYPE = "DUP" & FMT/DHFFC[0] > 1.3)" $svvcf
+
+```
+
 
 ## SNP/Indel annotation
 
