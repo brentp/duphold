@@ -215,9 +215,6 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
     for i in (s+1)..e:
         local_stats.add(values[i])
 
-    info("local median:", local_stats.median)
-    info("median:", stats.median)
-
     # look left and right up to $size bases.
     # also offset by `off` bases to avoid sketchiness near event bounds.
     var
@@ -229,7 +226,6 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
     for i in (e + off)..min(e + size + off, values.high):
       flank_stats.add(values[i])
 
-    info("flank:", flank_stats.median)
     var tmp = @[gc]
     if variant.info.set("GCF", tmp) != Status.OK:
         quit "couldn't set GCF"
