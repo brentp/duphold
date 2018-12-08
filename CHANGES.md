@@ -1,3 +1,8 @@
+v0.1.2 (dev)
+============
++ remove PCRE dependency
++ reduce logging output
+
 v0.1.1
 ======
 + fix bug when later chroms had larger values (see: 9f88400 and thanks @raul-w for reporting and providing a test-case).
