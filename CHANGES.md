@@ -1,7 +1,8 @@
 v0.1.2 (dev)
 ============
-+ remove PCRE dependency
-+ reduce logging output
++ remove PCRE dependency.
++ reduce logging output.
++ support un-indexed VCFs without contig definitions.
 
 v0.1.1
 ======
