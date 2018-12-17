@@ -3,6 +3,7 @@ v0.1.2 (dev)
 + remove PCRE dependency.
 + reduce logging output.
 + support un-indexed VCFs without contig definitions.
++ use only PASS SNVs from --snps
 
 v0.1.1
 ======
