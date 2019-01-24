@@ -98,3 +98,20 @@ time duphold  -f $ref -t 3 -b $CRAM -o all.vcf -v ALL.wgs.merged-svs.vcf.gz
 for n in 100 1000 5000 10000 20000 40000 60000; do
 time duphold  -f $ref -t 3 -b $CRAM -o all.vcf -v ALL.wgs.merged-svs.vcf.gz.$n.vcf.gz
 done
+
+
+######## distribution of del, dup calls for truth:
+
+struth=paper-results/giab-with-fake.vcf.gz
+nim c -d:release paper/giab_ins_to_dup.nim 
+# find what appear to be DUP calls
+./paper/giab_ins_to_dup /data/human/HG002_SVs_Tier1_v0.6.vcf.gz /data/human/g1k_v37_decoy.fa | bgzip -c > $struth
+# insert fake, 0/0 calls.
+nim c -r paper/insert_regions.nim $struth /data/human/HG002_SVs_Tier1_v0.6.bed t.vcf.gz
+mv t.vcf.gz $struth
+
+mkdir -p paper-results/
+for f in 500 5000 50000; do
+  DUPHOLD_FLANK=$f ./src/duphold -f /data/human/g1k_v37_decoy.fa -v $struth -t 3 -o paper-results/giab.duphold.flank-$f.vcf.gz -b /data/human/hg002.cram
+done
+
