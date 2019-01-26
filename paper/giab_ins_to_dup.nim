@@ -84,7 +84,9 @@ for v in vcf:
       var stop = @[int32(v.start + v.ALT[0].len + 1)]
       if v.info.set("END", stop) != Status.OK:
         quit "couldn't set end of dup"
-
+    else:
+      # just a normal insertion. not a DUP
+      continue
   doAssert ovcf.write_variant(v)
 
 ovcf.close()

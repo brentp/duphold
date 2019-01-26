@@ -107,11 +107,15 @@ nim c -d:release paper/giab_ins_to_dup.nim
 # find what appear to be DUP calls
 ./paper/giab_ins_to_dup /data/human/HG002_SVs_Tier1_v0.6.vcf.gz /data/human/g1k_v37_decoy.fa | bgzip -c > $struth
 # insert fake, 0/0 calls.
-nim c -r paper/insert_regions.nim $struth /data/human/HG002_SVs_Tier1_v0.6.bed t.vcf.gz
+nim c -r paper/insert_regions.nim $struth /data/human/HG002_SVs_Tier1_v0.6.bed t.vcf.gz /data/human/g1k_v37_decoy.fa
 mv t.vcf.gz $struth
 
 mkdir -p paper-results/
 for f in 500 5000 50000; do
-  DUPHOLD_FLANK=$f ./src/duphold -f /data/human/g1k_v37_decoy.fa -v $struth -t 3 -o paper-results/giab.duphold.flank-$f.vcf.gz -b /data/human/hg002.cram
+  DUPHOLD_FLANK=$f ./src/duphold -f /data/human/g1k_v37_decoy.fa -v $struth -t 3 -o paper-results/giab.duphold.flank-$f.vcf.gz -b /data/human/hg002.cram &
 done
+wait
 
+for step in 100 250 5000; do
+  echo "DUPHOLD_GC_STEP=$step ./src/duphold -f /data/human/g1k_v37_decoy.fa -v $struth -t 3 -o paper-results/giab.duphold.flank-step-$step.vcf.gz -b /data/human/hg002.cram"
+done | gargs -p 3 "{}"

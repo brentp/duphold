@@ -4,6 +4,8 @@ v0.1.2 (dev)
 + reduce logging output.
 + support un-indexed VCFs without contig definitions.
 + use only PASS SNVs from --snps
++ set DHFFC flank distance to 1000 default and allow setting via `DUPHOLD_FLANK` env var and only use non-zero values in DHFFC flank. These 2 changes should improve DHFFC for samples with sparse coverage (e.g. for genomes without good assemblies).
+
 
 v0.1.1
 ======

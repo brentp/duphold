@@ -18,23 +18,17 @@ single sample with:
 + **DHBFC**: fold-change for the variant depth *relative to bins in the genome with similar GC-content*.
 + **DHFFC**: fold-change for the variant depth *relative to **F**lanking regions*.
 
-If a SNP/Indel VCF/BCF is given, `duphold` will annotate each DEL/DUP call with (see below for more detail on what it does):
-
-+ **DHET**: counts of SNP heterozygotes in the SV supporting: [0] a normal heterozygote, [1] a triploid heterozygote.
-            for a DUP, we expect most hets to have an allele balance closer to 0.33 or 0.67 than to 0.5. A good heterozygous
-            DUP will have larger values of [1], than [0], though it's possible there are no HETs in small events.
-
-+ **DHHU**: counts of [0] Hom-ref, [1] Hom-alt, [2] Unknown variants in the event. A heterozygous deletion may have more hom-alt SNP calls.
-            A homozygous deletion may have only unknown SNP calls.
-
 It also adds **GCF** to the INFO field indicating the fraction of G or C bases in the variant.
 
 After annotating with `duphold`, a sensible way to filter to high-quality variants is:
 
 ```
-bcftools view -i '(SVTYPE = "DEL" & FMT/DHFFC[0] < 0.7) | (SVTYPE = "DUP" & FMT/DHFFC[0] > 1.3)" $svvcf
+bcftools view -i '(SVTYPE = "DEL" & FMT/DHFFC[0] < 0.7) | (SVTYPE = "DUP" & FMT/DHBFC[0] > 1.3)" $svvcf
 
 ```
+
+In our evaluations, `DHFFC` works best for deletions and `DHBFC` works slightly better for duplications.
+For genomes/samples with more variable coverage, `DHFFC` should be the most reliable.
 
 
 ## SNP/Indel annotation
@@ -49,6 +43,18 @@ SNP calls. For each chromosome, it will store a minimal (low-memory representati
 then query this data structure for each SV and count the number of heterozygotes supporting a diploid HET (allele balance close to 0.5)
 or a triploid HET (allele balance close to 0.33 or 0.67) into `DHET`. It will store the number of Hom-Ref, Hom-Alt, Unnkown calls in
 `DHHU`.
+
+When a SNP/Indel VCF/BCF is given, `duphold` will annotate each DEL/DUP call with:
+
++ **DHET**: counts of SNP heterozygotes in the SV supporting: [0] a normal heterozygote, [1] a triploid heterozygote.
+            for a DUP, we expect most hets to have an allele balance closer to 0.33 or 0.67 than to 0.5. A good heterozygous
+            DUP will have larger values of [1], than [0], though it's possible there are no HETs in small events.
+
++ **DHHU**: counts of [0] Hom-ref, [1] Hom-alt, [2] Unknown variants in the event. A heterozygous deletion may have more hom-alt SNP calls.
+            A homozygous deletion may have only unknown SNP calls.
+
+In practice, this has not proven useful for us. The depth changes are more informative.
+
 
 ## Performance
 

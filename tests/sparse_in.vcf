@@ -1,0 +1,21 @@
+##fileformat=VCFv4.2
+##FILTER=<ID=PASS,Description="All filters passed">
+##contig=<ID=NW_017858824.1,length=609797>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths for the ref and alt alleles in the order listed">
+##FILTER=<ID=HET1,Description="Heterozygous in CHM1">
+##FILTER=<ID=HET13,Description="Heterozygous in CHM13">
+##FILTER=<ID=GAP1,Description="Uncalled in CHM1">
+##FILTER=<ID=GAP13,Description="Uncalled in CHM13">
+##bcftools_viewVersion=1.4-19-g1802ff3+htslib-1.4-29-g42bfe70
+##bcftools_viewCommand=view CHM1_CHM13/full.37d5.vcf.gz; Date=Mon Sep 24 13:48:04 2018
+##INFO=<ID=GCF,Number=1,Type=Float,Description="GC-content fraction for the variant region betwee 0 and 1.">
+##INFO=<ID=CIPOS,Number=2,Type=Integer,Description="">
+##INFO=<ID=CIEND,Number=2,Type=Integer,Description="">
+##INFO=<ID=CIEND95,Number=2,Type=Integer,Description="">
+##INFO=<ID=CIPOS95,Number=2,Type=Integer,Description="">
+##INFO=<ID=END,Number=1,Type=Integer,Description="end">
+##INFO=<ID=SVTYPE,Number=1,Type=String,Description="">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="depth">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	Eluc-CR2.F
+NW_017858824.1	135118	72454	N	<DEL>	5875.46	.	SVTYPE=DEL;END=135332;CIPOS=0,0;CIEND=0,0;CIPOS95=0,0;CIEND95=0,0	GT:DP	0/1:200

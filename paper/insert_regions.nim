@@ -1,4 +1,5 @@
 import hts/vcf
+import hts/fai
 import hts/private/hts_concat
 import algorithm
 import strutils
@@ -20,33 +21,46 @@ proc read_bed(path: string): seq[br] =
     if toks[0] == "Y": continue
     result.add(br(chrom: toks[0], start: parseInt(toks[1]), stop: parseInt(toks[2])))
 
-proc choose(v:Variant, regions: var seq[br]): br =
+proc choose(v:Variant, regions: var seq[br], fai:Fai): br =
   var L = v.stop - v.start
   for i in 0..100:
-    var b = rand(regions)
+    var b = random(regions)
     if b.stop - b.start > L or i == 99:
       var bL = b.stop - b.start
-      var diff = int((bL - L).float64.abs / 2.0)
-      return br(chrom: b.chrom, start:b.start + diff, stop: b.start + L + diff)
+      var diff = int((bL - L).float64.abs / 3.0)
+      if b.start + L + diff < fai.chrom_len(b.chrom):
+        result = br(chrom: b.chrom, start:b.start + diff, stop: b.start + L + diff)
+      else:
+        result = br(chrom: b.chrom, start:b.start, stop: b.start + L)
+      var fseq: string
+      doAssert result.stop <= fai.chrom_len(b.chrom)
+      if result.stop - result.start > 10:
+        fseq = fai.get(result.chrom, result.start, result.stop)
+      else:
+        fseq = fai.get(result.chrom, result.start - 50, result.stop + 50)
+      # keep trying if 'N' count is too high.
+      if fseq.count('G').float64 != 0 and fseq.count('N').float64 / fseq.len.float64 < 0.1: return
+  stderr.write_line "returning after 100 tries"
 
-proc make_homref_variant(v:Variant, regions: var seq[br]): Variant =
+proc make_homref_variant(v:Variant, regions: var seq[br], fai:Fai): Variant =
   result = v.copy()
-  var b = v.choose(regions)
-  stderr.write_line "before:", v.start, "...", v.stop
+  var b = v.choose(regions, fai)
+  #stderr.write_line "before:", v.start, "...", v.stop
   result.c.pos = b.start.int32
-  result.c.rid = bcf_hdr_name2id(v.vcf.header.hdr, v.CHROM)
+  result.c.rid = bcf_hdr_name2id(v.vcf.header.hdr, b.chrom)
   var s = result.tostring.replace("\t0/1:", "\t0/0:").replace("\t1/1:", "\t0/0:").strip()
   var vals = @[1'i32]
   result.from_string(result.vcf.header, s)
   doAssert result.info.set("fake", vals) == Status.OK
   var stop = @[(result.start + b.stop - b.start).int32]
   doAssert result.info.set("END", stop) == Status.OK
-  stderr.write_line "after:", result.start, "...", result.stop
+  #stderr.write_line "after:", result.start, "...", result.stop
 
 proc main() =
   var
     vcf:VCF
     wtr:VCF
+    fai:Fai
   if not open(vcf, paramStr(1)):
     quit "couldn't open vcf"
   var bed = read_bed(paramStr(2))
@@ -57,13 +71,18 @@ proc main() =
   if not open(wtr, paramStr(3), mode="w"):
     quit "bad"
 
+  if not open(fai, paramStr(4)):
+    quit "couldn't open fai at:" & paramStr(4)
+
   wtr.copy_header(vcf.header)
 
   for v in vcf:
     if v.FILTER != "PASS": continue
     doAssert v.format.fields[0].name == "GT"
+    var stops = @[v.stop.int32]
+    doAssert v.info.set("END", stops) == Status.OK
     vs.add(v.copy())
-    vs.add(v.make_homref_variant(bed))
+    vs.add(v.make_homref_variant(bed, fai))
   stderr.write_line $vs.len
 
   vs.sort(proc(a, b: Variant): int =
