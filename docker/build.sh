@@ -6,7 +6,7 @@ base=$(pwd)
 git clone -b devel --depth 1000 git://github.com/nim-lang/nim nim
 cd nim
 # before unchecked was removed:
-git checkout cc5b8c6
+#git checkout cc5b8c6
 sh build_all.sh
 export PATH=$(base)/nim/bin:$PATH
 

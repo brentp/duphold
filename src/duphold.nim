@@ -12,7 +12,22 @@ import genoiser
 import ./dupholdpkg/version
 import ./dupholdpkg/bin_table
 
-const STEP = 200
+var STEP = 250 ## size of GC window
+var SIZE = 1_000 # flank size
+const GC_BINS = 20 ## number of bins to partition gc-content
+
+proc setenvvars() =
+  try:
+    SIZE = parseInt(getEnv("DUPHOLD_FLANK"))
+    stderr.write_line "[duphold] set flank size to " & $SIZE
+  except:
+    discard
+  try:
+    STEP = parseInt(getEnv("DUPHOLD_GC_STEP"))
+    stderr.write_line "[duphold] set gc-step to " & $STEP
+  except:
+    discard
+
 
 type MedianStats* = object
   ## since we expect nearly all values to be < 1000
@@ -86,7 +101,7 @@ proc percentile*(m:MedianStats, pct:float64): int {.inline.} =
   return -1
 
 proc `$`(m:var MedianStats): string =
-    return &"MedianStats(n:{m.n}, median:{m.median} vals: {m.counts[0..100]})"
+    return &"MedianStats(n:{m.n}, vals: {m.counts[0..1000]})"
 
 type Discordant* = ref object
   left*: uint32
@@ -102,9 +117,9 @@ proc find(targets:seq[Target], chrom:string): int =
 
 proc count_gc(gc: var seq[bool], s:int, e:int): float32 {.inline.} =
     var tot = 0
-    for i in s..<e:
+    for i in s..<min(e, gc.len):
         tot += gc[i].int
-    return tot.float32 / max(1, e - s).float32
+    return tot.float32 / max(1, min(e, gc.len) - s).float32
 
 proc gc_content*(fai:Fai, chrom:string, step:int, gc_bool: var seq[bool]): seq[float32] =
 
@@ -143,8 +158,6 @@ proc get_or_empty[T](variant:Variant, field:string, input:var seq[T], nper:int=1
     else:
         quit "unknown type in get_or_empty"
 
-
-type fc_position = tuple[fc:float64, position:int]
 
 proc get_bnd_mate_pos*(a:string, vchrom:string): int {.inline.} =
     if not (':' in a): return -1
@@ -207,9 +220,18 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
         # skip distant BND's as this is not informative
         if ':' in variant.ALT[0]: return -1
 
+    if e - s < 10:
+      s = max(0, s - 50)
+      e = min(e + 50, values.high)
+    e = min(e, values.high)
+    if s > e:
+      stderr.write_line "weird variant:", $variant
+
     var gc = count_gc(gc_bool, s, e)
-    var gci = (19 * gc).int
+    var gci = ((GC_BINS - 1) * gc).int
     var gc_stat = gc_stats[gci]
+    if gc_stat.n < 1000:
+      gc_stat = stats
 
     var local_stats = MedianStats()
     for i in (s+1)..e:
@@ -220,7 +242,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
     var
       flank_stats = MedianStats()
       off = 20
-      size = 5000
+      size = SIZE
     for i in max(0, s - size - off)..(s - off):
       flank_stats.add(values[i])
     for i in (e + off)..min(e + size + off, values.high):
@@ -239,11 +261,11 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
         quit "error setting DHFC in VCF"
 
     get_or_empty(variant, "DHFFC", floats)
-    var ffc = (local_stats.median / flank_stats.median).float32
+    var ffc = (local_stats.median / flank_stats.median(skip_zeros=true)).float32
+
     floats[sample_i] = ffc
     if variant.format.set("DHFFC", floats) != Status.OK:
         quit "error setting DHFFC in VCF"
-
 
     get_or_empty(variant, "DHBFC", floats)
     var gfc = (local_stats.median / gc_stat.median).float32
@@ -274,7 +296,7 @@ proc fill_stats*[T](depths: var seq[T], stats:var MedianStats, gc_stats:var seq[
   for w0 in countup(0, target_length - step, step):
       wi += 1
       if gc_count[wi] < 0: continue
-      var gci = (19 * gc_count[wi]).int
+      var gci = ((GC_BINS - 1) * gc_count[wi]).int
       # get the correct stat for the gc in this window and update it.
       for i in w0..<(w0 + step):
           if depths[i] == 0: continue
@@ -365,12 +387,11 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       target = nil
       last_chrom = $variant.CHROM
       stats = MedianStats()
-      gc_stats = newSeq[MedianStats](20)
+      gc_stats = newSeq[MedianStats](GC_BINS)
       for i, g in gc_stats:
           gc_stats[i] = MedianStats()
       gc_count = gc_count[0..<0]
       var
-        start = 0
         i = targets.find(last_chrom)
 
       if i == -1:
@@ -385,10 +406,7 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       discs.setLen(0)
       GC_fullCollect()
 
-      info("starting read of bam values for chrom: " & target.name)
-      var t = cpuTime()
       discard genoiser[int16](bam, @[depths], target.name, 0, target.length.int)
-      info("finished reading:" & target.name & ". starting gc-content, discordant sorting")
 
       gc_count = fai.gc_content(last_chrom, step, gc_bool)
       depths.values.fill_stats(stats, gc_stats, gc_count, step, target.length.int)
@@ -398,7 +416,6 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
               return a.right.int - b.right.int
           return a.left.int - b.left.int
       )
-      info("finished gc-content, sorting")
 
       discard variant.duphold(depths.values, sample_i, stats, gc_stats, gc_bool, w=w, discordants=discs, i99=i99)
       yield variant
@@ -555,6 +572,7 @@ Options:
     quit "unable to open output vcf"
 
   var threads = parseInt($args["--threads"])
+  setenvvars()
   if $args["--snp"] != "nil" and not open(snps, $args["--snp"], threads=threads):
       quit "couldn't open snp VCF at:" & $args["--snp"]
 
@@ -566,7 +584,7 @@ Options:
       quit "unable to add to header"
   if vcf.header.add_format("DHBFC", "1", "Float", "duphold depth fold-change compared to bins with matching GC") != Status.OK:
       quit "unable to add to DHBFC header"
-  if vcf.header.add_format("DHFFC", "1", "Float", "duphold depth flank fold-change compared 1KB left and right of event") != Status.OK:
+  if vcf.header.add_format("DHFFC", "1", "Float", &"duphold depth flank fold-change compared to {SIZE}bp left and right of event") != Status.OK:
       quit "unable to add to DHFFC header"
   if vcf.header.add_format("DHSP", "1", "Integer", "duphold count of spanning read-pairs") != Status.OK:
       quit "unable to add DHSP to header"
