@@ -112,6 +112,8 @@ the snp/indel file contains many (>20 or so) samples.
 
 the threads are decompression threads so increasing up to about 4 works.
 
+Full usage is available with `duphold -h`
+
 ## Examples
 
 #### Duplication
@@ -150,6 +152,15 @@ shows where a deletion is bounded by 2 BND calls. `duphold` annotates this with:
 + **DHBFC**: 0.01
 
 indicating a homozygous deletion with clear break-points.
+
+
+## Tuning
+
+The default flank is 1000 bases. If the environment variable `DUPHOLD_FLANK` is set to an integer, that
+can be used instead. In our experiments, this value should be large enough that duphold can get a good estimate
+of depth, but small enough that it is unlikely to extend into an unmapped region or another event.
+This may be lowered for genomes with poor assemblies.
+
 
 ## Acknowledgements
 
