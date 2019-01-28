@@ -1,5 +1,5 @@
-v0.1.2 (dev)
-============
+v0.1.2
+======
 + remove PCRE dependency.
 + reduce logging output.
 + support un-indexed VCFs without contig definitions.
