@@ -5,12 +5,15 @@ from matplotlib import pyplot as plt
 import numpy as np
 sns.set_style('white')
 
+SIZE_MIN = 0
+SIZE_MAX = sys.maxint
+
 colors = sns.color_palette()
 
 metrics = {"DUP": [[], [], []],
            "DEL": [[], [], []]}
 
-metric_dup = "DHBFC"
+metric_dup = "DHFFC"
 metric_del = "DHFFC"
 
 gcs = {"DUP":[], "DEL": []}
@@ -19,6 +22,11 @@ for v in cyvcf2.VCF(sys.argv[1], gts012=True):
     if v.FILTER is not None: continue
     svtype = v.INFO.get("SVTYPE")
     if not svtype in ("DEL", "DUP"): continue
+
+    size = v.end - v.start
+    if size < SIZE_MIN: continue
+    if size >= SIZE_MAX: continue
+
     gt = v.gt_types[0]
 
     gcs[svtype].append(v.INFO.get("GCF"))
@@ -54,6 +62,7 @@ from sklearn.metrics import auc, roc_curve
 
 L = ["xx", "0/1", "1/1"]
 
+print "> %d..%d" % (SIZE_MIN, SIZE_MAX)
 for i, ev in enumerate(("DUP", "DEL")):
 
     for alts in (1, 2):
@@ -61,7 +70,12 @@ for i, ev in enumerate(("DUP", "DEL")):
         scores = metrics[ev][0] + metrics[ev][alts]
         if ev == "DEL":
             scores = [-s for s in scores]
-        fpr, tpr, rscores = roc_curve(truth, scores)
+        try:
+            fpr, tpr, rscores = roc_curve(truth, scores)
+        except ValueError:
+            fpr = np.array([0, 1])
+            tpr = np.array([0, 1])
+            rscores = np.array([0, 1])
         if ev == "DEL":
             rscores = -rscores
             idx = np.searchsorted(rscores, 0.7)
@@ -72,6 +86,7 @@ for i, ev in enumerate(("DUP", "DEL")):
         ax[i, 1].text(0.4, 0.04 + (2 - alts) * 0.1, "0/0 vs %s AUC: %.2f"
                 % (L[alts], auc(fpr, tpr)),
                 color=colors[alts])
+        print "%s\t%s\t%.2f\t%d" % (ev, L[alts], auc(fpr, tpr), len(truth))
         ax[i, 1].plot([fpr[idx]], [tpr[idx]], marker='o', color=colors[alts])
     ax[i, 1].text(0.4, 0.04 + 2 * 0.1, "Duplications" if ev == "DUP" else "Deletions")
 
@@ -81,5 +96,7 @@ ax[1, 1].set_ylabel("Specificity")
 ax[0, 1].set_ylabel("specificity")
 
 plt.tight_layout()
+plt.savefig("figure1.png", dpi=600)
+plt.savefig("figure1.eps", dpi=600)
 plt.show()
 plt.close()

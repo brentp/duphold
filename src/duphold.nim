@@ -416,7 +416,6 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
               return a.right.int - b.right.int
           return a.left.int - b.left.int
       )
-      #info("finished gc-content, sorting")
 
       discard variant.duphold(depths.values, sample_i, stats, gc_stats, gc_bool, w=w, discordants=discs, i99=i99)
       yield variant
