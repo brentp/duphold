@@ -154,12 +154,15 @@ shows where a deletion is bounded by 2 BND calls. `duphold` annotates this with:
 indicating a homozygous deletion with clear break-points.
 
 
-## Tuning
+## Tuning and Env vars
 
 The default flank is 1000 bases. If the environment variable `DUPHOLD_FLANK` is set to an integer, that
 can be used instead. In our experiments, this value should be large enough that duphold can get a good estimate
 of depth, but small enough that it is unlikely to extend into an unmapped region or another event.
 This may be lowered for genomes with poor assemblies.
+
+If the sample name in your bam does not match the one in the VCF (tisk, tisk). You can use `DUPHOLD_SAMPLE_NAME`
+environment variable to set the name to use.
 
 
 ## Acknowledgements

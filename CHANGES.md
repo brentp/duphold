@@ -1,3 +1,7 @@
+v0.1.3 (dev)
+============
++ add `DUPHOLD_SAMPLE_NAME` environment variable as a way to set the sample name. (#19)
+
 v0.1.2
 ======
 + remove PCRE dependency.

@@ -516,13 +516,12 @@ proc annotate*(snps:snpset, variant:Variant, sample_i:int) =
         quit "error setting DHHU in VCF"
 
 proc sample_name(b:Bam): string =
-    for line in ($b.hdr).split("\n"):
-        if not line.startswith("@RG"): continue
-        var tmp = line.split("SM:")[1].split("\t")[0].strip()
-        if result != "" and tmp != result:
-            raise newException(ValueError, "found multiple samples in bam:" & result & "," & tmp)
-        result = tmp
-
+  for line in ($b.hdr).split("\n"):
+    if not line.startswith("@RG"): continue
+    var tmp = line.split("SM:")[1].split("\t")[0].strip()
+    if result != "" and tmp != result:
+      raise newException(ValueError, "found multiple samples in bam:" & result & "," & tmp)
+    result = tmp
 
 proc main(argv: seq[string]) =
   var L = newConsoleLogger(fmtStr=verboseFmtStr)
@@ -602,7 +601,11 @@ Options:
   discard bam.set_option(FormatOption.CRAM_OPT_REQUIRED_FIELDS, 510)
   sample_i = vcf.samples.find(bam.sample_name)
   if sample_i == -1:
-      quit "couldn't find sample:" & bam.sample_name & " in vcf which had:" & join(vcf.samples, ",")
+    if getEnv("DUPHOLD_SAMPLE_NAME") != "":
+      stderr.write_line "[duphold] " & "trying sample name from env:" & getEnv("DUPHOLD_SAMPLE_NAME")
+      sample_i = vcf.samples.find(getEnv("DUPHOLD_SAMPLE_NAME"))
+    if sample_i == -1:
+      quit "couldn't find sample from bam:" & bam.sample_name & "or ENV in vcf which had:" & join(vcf.samples, ",")
   if args["--drop"]:
     vcf.set_samples(@[bam.sample_name])
     sample_i = 0
