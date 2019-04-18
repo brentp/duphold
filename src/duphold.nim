@@ -10,7 +10,6 @@ import math
 import docopt
 import genoiser
 import ./dupholdpkg/version
-import ./dupholdpkg/bin_table
 
 var STEP = 250 ## size of GC window
 var SIZE = 1_000 # flank size
@@ -440,33 +439,80 @@ proc innerCI(v:Variant): inner {.inline.} =
     if result[1] < result[0]:
         result = (result[1], result[0])
 
+
 type snpset = ref object
   starts: seq[int32]
-  nalts: seq[int8]
-  hetc: seq[int8]
+  nalts: seq[int8] # 0 == HOM-REF, 1 == HET, 2 == HOM-ALT, 3 == UNKNOWN, 4 == Low-Q
+  non_transmission: seq[bool]
 
-proc read(snps:VCF, chrom:string): snpset =
+template AB(sample_i:int, AD:seq[int32]): float32 =
+  var a = AD[2*sample_i+1].float32
+  a / max(1, a + AD[2*sample_i].float32)
+
+template DP(sample_i: int, AD:seq[int32]): int32 =
+  AD[2*sample_i+1] + AD[2*sample_i]
+
+proc hq(sample_i: int, GQ: seq[int32], AD: seq[int32], alts: seq[int8], min_dp=9): bool =
+  if sample_i.DP(AD) < min_dp: return false
+  if GQ[sample_i] < 20: return false
+  var ab = sample_i.AB(AD)
+  case alts[sample_i]:
+    of 0:
+      return ab < 0.01
+    of 1:
+      return ab > 0.3 and ab < 0.7
+    of 2:
+      return ab > 0.99
+    else:
+      return false
+
+proc get_order(vcf_samples: seq[string], snp_samples: seq[string]): seq[int] =
+  doAssert vcf_samples.len == snp_samples.len
+  if vcf_samples.len == 0:
+    return @[0]
+  result = newSeq[int](vcf_samples.len)
+  for i, s in snp_samples:
+    result[i] = vcf_samples.find(s)
+    doAssert result[i] != -1
+  # so result[0] will always return the vcf_index of the proband.
+
+proc read(snps:VCF, chrom:string, snp_order: seq[string]): snpset =
   ## read all bi-allelic, high-quality snps into the snpset.
   info("starting to read snps for chrom: " & chrom)
-  if snps.n_samples != 1:
-      quit "only works for 1 snp"
-  result = snpset(starts:newSeqOfCap[int32](8192), nalts:newSeqOfCap[int8](8192), hetc:newSeqOfCap[int8](8192))
+
+  var order = get_order(snps.samples, snp_order)
+  result = snpset(starts:newSeqOfCap[int32](32768), nalts:newSeqOfCap[int8](32768), non_transmission: newSeqOfCap[bool](32768))
   var ad = newSeq[int32](2)
   var gt = newSeq[int32](2)
+  var gq = newSeq[int32](2)
   for snv in snps.query(chrom):
-    if len(snv.REF) > 1 or len(snv.ALT) > 1 or len(snv.ALT[0]) > 1 or snv.QUAL < 20: continue
+    if len(snv.REF) > 1 or len(snv.ALT) != 1 or len(snv.ALT[0]) != 1 or snv.QUAL < 20: continue
     if snv.FILTER != "PASS": continue
-    var gts = snv.format.genotypes(gt)[0]
-    var nalts = gts.alts
+    var alts = snv.format.genotypes(gt).alts
 
     result.starts.add(snv.start.int32)
-    result.nalts.add(nalts)
-    if nalts == 1:
-      if snv.format.get("AD", ad) != Status.OK:
-        quit "expected AD field in snps VCF"
-      result.hetc.add(het_lookup(ad[0], ad[1], 13))
+    result.non_transmission.add(false)
+
+    var sample_alts = alts[order[0]]
+    if sample_alts == -1:
+      result.nalts.add(3)
+      continue
+
+    if snv.format.get("AD", ad) != Status.OK:
+      quit "expected AD field in snps VCF"
+    if snv.format.get("GQ", gq) != Status.OK:
+      quit "expected GQ field in snps VCF"
+
+    if not hq(order[0], gq, ad, alts):
+      result.nalts.add(4)
     else:
-      result.hetc.add(-1)
+      result.nalts.add(sample_alts)
+      if sample_alts == 0 or sample_alts == 2:
+        for i in 1..order.high:
+          if not hq(order[i], gq, ad, alts): continue
+          if sample_alts + alts[order[i]] == 2:
+            result.non_transmission[result.non_transmission.high] = true
+            break
 
   info("done reading " & $result.starts.len & " bi-allelic snps for chrom: " & chrom)
 
@@ -535,6 +581,7 @@ proc main(argv: seq[string]) =
 Options:
   -v --vcf <path>           path to sorted SV VCF/BCF
   -b --bam <path>           path to indexed BAM/CRAM
+  -p --parent <string>      optional comma-delimited list of parent-id(s) to check for LOH in snp VCF.
   -f --fasta <path>         indexed fasta reference.
   -s --snp <path>           optional path to snp/indel VCF/BCF with which to annotate SVs. BCF is highly recommended as it's much faster to parse.
   -t --threads <int>        number of decompression threads. [default: 4]
@@ -551,6 +598,7 @@ Options:
     ovcf:VCF
     sample_i: int
     snps:VCF
+    parents: seq[string]
 
   if $args["--fasta"] == "nil":
     echo doc
@@ -575,6 +623,7 @@ Options:
   if $args["--snp"] != "nil" and not open(snps, $args["--snp"], threads=threads):
       quit "couldn't open snp VCF at:" & $args["--snp"]
 
+
   if vcf.header.add_info("GCF", "1", "Float", "GC-content fraction for the variant region betwee 0 and 1.") != Status.OK:
       quit "unable to add to header"
   #if vcf.header.add_format("DHZ", "1", "Float", "duphold z-score for depth") != Status.OK:
@@ -587,10 +636,7 @@ Options:
       quit "unable to add to DHFFC header"
   if vcf.header.add_format("DHSP", "1", "Integer", "duphold count of spanning read-pairs") != Status.OK:
       quit "unable to add DHSP to header"
-
-  if snps != nil and vcf.header.add_format("DHET", "2", "Integer", "duphold count of SNP heterozygotes in the event supporting: a normal heterozygote, a triploid heterozygote") != Status.OK:
-      quit "unable DHET to add to header"
-  if snps != nil and vcf.header.add_format("DHHU", "3", "Integer", "count of hom-ref, hom-alt, unknown SNP variants in the event") != Status.OK:
+  if snps != nil and vcf.header.add_format("DHGT", "4", "Integer", "count of hi-quality hom-ref, het, hom-alt, unknown SNP variant genotypes in the event") != Status.OK:
       quit "unable DHUU to add to header"
 
   open(bam, $args["--bam"], index=true, threads=threads, fai=($args["--fasta"]))
@@ -606,15 +652,29 @@ Options:
       sample_i = vcf.samples.find(getEnv("DUPHOLD_SAMPLE_NAME"))
     if sample_i == -1:
       quit "couldn't find sample from bam:" & bam.sample_name & "or ENV in vcf which had:" & join(vcf.samples, ",")
+
   if args["--drop"]:
     vcf.set_samples(@[bam.sample_name])
     sample_i = 0
   ovcf.header = vcf.header
 
+  var snp_order = @[bam.sample_name]
   if snps != nil:
+    if $args["parents"] != "nil":
+      parents = ($args["parents"]).strip().split(",")
+      if vcf.header.add_format("DHNT", "1", "Integer", "duphold non-transmitted. count of hi-quality non-transmitted alleles in the event indicative of LOH") != Status.OK:
+        quit "unable to add DHNT to header"
+      if vcf.header.add_format("DHT", "1", "Integer", "duphold transmitted. count of hi-quality transmitted alleles in the event contrasting LOH") != Status.OK:
+        quit "unable to add DHT to header"
+
+
     if snps.samples.find(bam.sample_name) == -1:
-      quit "couldn't find sample:" & bam.sample_name & " in snps vcf which had:" & join(snps.samples, ",")
-    snps.set_samples(@[bam.sample_name])
+      quit "[duphold] couldn't find sample:" & bam.sample_name & " in snps vcf which had:" & join(snps.samples, ",")
+    for parent in parents:
+      if snps.samples.find(parent) == -1:
+        quit "[duphold] " & "couldn't find parent:" & parent & " in snp VCF"
+    snp_order.add(parents)
+    snps.set_samples(snp_order)
 
   if not ovcf.write_header():
       quit "couldn't write vcf header"
@@ -624,7 +684,7 @@ Options:
   for variant in bam.duphold(vcf, fai, sample_i):
       if snps != nil:
           if last_chrom != variant.CHROM:
-            snpst = snps.read($variant.CHROM)
+            snpst = snps.read($variant.CHROM, snp_order)
             last_chrom = variant.CHROM
 
           snpst.annotate(variant, sample_i)
