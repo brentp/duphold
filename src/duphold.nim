@@ -427,18 +427,16 @@ proc innerCI(v:Variant): inner {.inline.} =
     if v.info.get("CIPOS95", ci) == Status.OK:
         result[0] += ci[1]
         if v.info.get("CIEND95", ci) == Status.OK:
-            result[0] += ci[0]
+            result[1] += ci[0]
 
-    if result[1] - result[0] < 10000: return
+    if result[1] - result[0] < 5000: return
     # for a longer variant, get a tighter bound
-
     if v.info.get("CIPOS", ci) == Status.OK:
         result[0] += ci[1]
     if v.info.get("CIEND", ci) == Status.OK:
         result[1] += ci[0]
     if result[1] < result[0]:
         result = (result[1], result[0])
-
 
 type snpset = ref object
   starts: seq[int32]
@@ -517,49 +515,44 @@ proc read(snps:VCF, chrom:string, snp_order: seq[string]): snpset =
   info("done reading " & $result.starts.len & " bi-allelic snps for chrom: " & chrom)
 
 
-proc annotate*(snps:snpset, variant:Variant, sample_i:int) =
-    ## annotate a structural variant with the snps.
-    if len(snps.starts) == 0: return
+proc annotate*(snps:snpset, variant:Variant, sample_i:int, has_parents: bool) =
+  ## annotate a structural variant with the snps.
+  if len(snps.starts) == 0: return
 
-    # dont annotate BNDs (or INVs)
-    if ':' in variant.ALT[0] or variant.ALT[0] == "<INV>": return
-    var dhet = newSeq[int32](2 * variant.vcf.n_samples)
-    get_or_empty(variant, "DHET", dhet, 2)
-    dhet[2 * sample_i] = 0
-    dhet[2 * sample_i + 1] = 0
+  # dont annotate BNDs (or INVs)
+  if ':' in variant.ALT[0] or variant.ALT[0] == "<INV>": return
+  var dhgt = newSeq[int32](5 * variant.vcf.n_samples)
+  get_or_empty(variant, "DHGT", dhgt, 5)
+  dhgt[5*sample_i] = 0
+  dhgt[5*sample_i+1] = 0
+  dhgt[5*sample_i+2] = 0
+  dhgt[5*sample_i+3] = 0
+  dhgt[5*sample_i+4] = 0
 
-    var dhhu = newSeq[int32](3 * variant.vcf.n_samples)
-    get_or_empty(variant, "DHHU", dhhu, 3)
-    dhhu[3 * sample_i] = 0
-    dhhu[3 * sample_i + 1] = 0
-    dhhu[3 * sample_i + 2] = 0
+  var dhnt: seq[int32]
+  if has_parents:
+    dhnt = newSeq[int32](2 * variant.vcf.n_samples)
+    get_or_empty(variant, "DHNT", dhnt, 1)
+    dhnt[sample_i] = 0
 
-    var ci = innerCI(variant)
-    var i = lowerBound(snps.starts, ci.left.int32, system.cmp)
-    var n = 0
-    while snps.starts[i] < ci.right:
-        # only compare diploid to triploid allele balance if this was called a HET.
-        if snps.nalts[i] == 1:
-          if snps.hetc[i] == 0: # diploid
-              dhet[2 * sample_i] += 1
-          elif snps.hetc[i] == 1: # triploid
-              dhet[2 * sample_i + 1] += 1
+  var ci = innerCI(variant)
+  var i = lowerBound(snps.starts, ci.left.int32, system.cmp)
+  var n = 0
+  while snps.starts[i] < ci.right:
+    # only compare diploid to triploid allele balance if this was called a HET.
+    dhgt[5 * sample_i + snps.nalts[i]] += 1
+    if has_parents:
+      dhnt[sample_i] += snps.non_transmission[i].int32
+    n += 1
+    i += 1
 
-        elif snps.nalts[i] == 0: # hom-ref
-            dhhu[3 * sample_i] += 1
-        elif snps.nalts[i] == 2: # hom-alt
-            dhhu[3 * sample_i + 1] += 1
-        elif snps.nalts[i] == -1: # unknown
-            dhhu[3 * sample_i + 2] += 1
-        i += 1
-        n += 1
-    if n == 0:
-        return
+  if n == 0:
+    return
 
-    if variant.format.set("DHET", dhet) != Status.OK:
-        quit "error setting DHET in VCF"
-    if variant.format.set("DHHU", dhhu) != Status.OK:
-        quit "error setting DHHU in VCF"
+  if variant.format.set("DHGT", dhgt) != Status.OK:
+      quit "error setting DHGT in VCF"
+  if has_parents and variant.format.set("DHNT", dhnt) != Status.OK:
+      quit "error setting DHNT in VCF"
 
 proc sample_name(b:Bam): string =
   for line in ($b.hdr).split("\n"):
@@ -636,8 +629,8 @@ Options:
       quit "unable to add to DHFFC header"
   if vcf.header.add_format("DHSP", "1", "Integer", "duphold count of spanning read-pairs") != Status.OK:
       quit "unable to add DHSP to header"
-  if snps != nil and vcf.header.add_format("DHGT", "4", "Integer", "count of hi-quality hom-ref, het, hom-alt, unknown SNP variant genotypes in the event") != Status.OK:
-      quit "unable DHUU to add to header"
+  if snps != nil and vcf.header.add_format("DHGT", "5", "Integer", "count of hi-quality hom-ref, het, hom-alt, unknown, low-quality SNP variant genotypes in the event") != Status.OK:
+      quit "unable DHGT to add to header"
 
   open(bam, $args["--bam"], index=true, threads=threads, fai=($args["--fasta"]))
   if bam == nil:
@@ -664,8 +657,6 @@ Options:
       parents = ($args["parents"]).strip().split(",")
       if vcf.header.add_format("DHNT", "1", "Integer", "duphold non-transmitted. count of hi-quality non-transmitted alleles in the event indicative of LOH") != Status.OK:
         quit "unable to add DHNT to header"
-      if vcf.header.add_format("DHT", "1", "Integer", "duphold transmitted. count of hi-quality transmitted alleles in the event contrasting LOH") != Status.OK:
-        quit "unable to add DHT to header"
 
 
     if snps.samples.find(bam.sample_name) == -1:
@@ -687,7 +678,7 @@ Options:
             snpst = snps.read($variant.CHROM, snp_order)
             last_chrom = variant.CHROM
 
-          snpst.annotate(variant, sample_i)
+          snpst.annotate(variant, sample_i, parents.len > 0)
       if not ovcf.write_variant(variant):
           quit "couldn't write variant"
 
