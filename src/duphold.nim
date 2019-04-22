@@ -10,7 +10,6 @@ import math
 import docopt
 import genoiser
 import ./dupholdpkg/version
-import ./dupholdpkg/bin_table
 
 var STEP = 250 ## size of GC window
 var SIZE = 1_000 # flank size
@@ -428,11 +427,10 @@ proc innerCI(v:Variant): inner {.inline.} =
     if v.info.get("CIPOS95", ci) == Status.OK:
         result[0] += ci[1]
         if v.info.get("CIEND95", ci) == Status.OK:
-            result[0] += ci[0]
+            result[1] += ci[0]
 
-    if result[1] - result[0] < 10000: return
+    if result[1] - result[0] < 5000: return
     # for a longer variant, get a tighter bound
-
     if v.info.get("CIPOS", ci) == Status.OK:
         result[0] += ci[1]
     if v.info.get("CIEND", ci) == Status.OK:
@@ -442,78 +440,97 @@ proc innerCI(v:Variant): inner {.inline.} =
 
 type snpset = ref object
   starts: seq[int32]
-  nalts: seq[int8]
-  hetc: seq[int8]
+  nalts: seq[int8] # 0 == HOM-REF, 1 == HET, 2 == HOM-ALT, 3 == UNKNOWN, 4 == Low-Q
+
+template AB(sample_i:int, AD:seq[int32]): float32 =
+  var a = AD[2*sample_i+1].float32
+  a / max(1, a + AD[2*sample_i].float32)
+
+template DP(sample_i: int, AD:seq[int32]): int32 =
+  AD[2*sample_i+1] + AD[2*sample_i]
+
+proc hq(sample_i: int, GQ: seq[int32], AD: seq[int32], alts: seq[int8], min_dp=9): bool =
+  if sample_i.DP(AD) < min_dp: return false
+  if GQ[sample_i] < 20: return false
+  var ab = sample_i.AB(AD)
+  case alts[sample_i]:
+    of 0:
+      return ab < 0.01
+    of 1:
+      return ab > 0.3 and ab < 0.7
+    of 2:
+      return ab > 0.99
+    else:
+      return false
 
 proc read(snps:VCF, chrom:string): snpset =
   ## read all bi-allelic, high-quality snps into the snpset.
   info("starting to read snps for chrom: " & chrom)
-  if snps.n_samples != 1:
-      quit "only works for 1 snp"
-  result = snpset(starts:newSeqOfCap[int32](8192), nalts:newSeqOfCap[int8](8192), hetc:newSeqOfCap[int8](8192))
+
+  result = snpset(starts:newSeqOfCap[int32](32768), nalts:newSeqOfCap[int8](32768))
   var ad = newSeq[int32](2)
-  var gt = newSeq[int32](2)
+  var gt = newSeq[int32](1)
+  var gq = newSeq[int32](1)
   for snv in snps.query(chrom):
-    if len(snv.REF) > 1 or len(snv.ALT) > 1 or len(snv.ALT[0]) > 1 or snv.QUAL < 20: continue
-    if snv.FILTER != "PASS": continue
-    var gts = snv.format.genotypes(gt)[0]
-    var nalts = gts.alts
+    if len(snv.REF) > 1 or len(snv.ALT) != 1 or len(snv.ALT[0]) != 1 or snv.QUAL < 20: continue
+    if snv.FILTER notin ["", ".", "PASS"]: continue
+    var alts = snv.format.genotypes(gt).alts
 
     result.starts.add(snv.start.int32)
-    result.nalts.add(nalts)
-    if nalts == 1:
-      if snv.format.get("AD", ad) != Status.OK:
-        quit "expected AD field in snps VCF"
-      result.hetc.add(het_lookup(ad[0], ad[1], 13))
+
+    var sample_alts = alts[0]
+    if sample_alts == -1:
+      result.nalts.add(3)
+      continue
+
+    if snv.format.get("AD", ad) != Status.OK:
+      quit "expected AD field in snps VCF"
+    var st = snv.format.get("GQ", gq)
+    if st == Status.UnexpectedType:
+      var o = cast[seq[float32]](gq)
+      if snv.format.get("GQ", o) != Status.OK:
+        quit "unable to extract GQ field in snps VCF"
+      gq.setLen(o.len)
+      for i, v in o:
+        gq[i] = v.int32
     else:
-      result.hetc.add(-1)
+      quit "expected GQ field in snps VCF"
+
+    if not hq(0, gq, ad, alts):
+      result.nalts.add(4)
+    else:
+      result.nalts.add(sample_alts)
 
   info("done reading " & $result.starts.len & " bi-allelic snps for chrom: " & chrom)
 
 
 proc annotate*(snps:snpset, variant:Variant, sample_i:int) =
-    ## annotate a structural variant with the snps.
-    if len(snps.starts) == 0: return
+  ## annotate a structural variant with the snps.
+  if len(snps.starts) == 0: return
 
-    # dont annotate BNDs (or INVs)
-    if ':' in variant.ALT[0] or variant.ALT[0] == "<INV>": return
-    var dhet = newSeq[int32](2 * variant.vcf.n_samples)
-    get_or_empty(variant, "DHET", dhet, 2)
-    dhet[2 * sample_i] = 0
-    dhet[2 * sample_i + 1] = 0
+  # dont annotate BNDs (or INVs)
+  if ':' in variant.ALT[0] or variant.ALT[0] == "<INV>": return
+  var dhgt = newSeq[int32](5 * variant.vcf.n_samples)
+  get_or_empty(variant, "DHGT", dhgt, 5)
+  dhgt[5*sample_i] = 0
+  dhgt[5*sample_i+1] = 0
+  dhgt[5*sample_i+2] = 0
+  dhgt[5*sample_i+3] = 0
+  dhgt[5*sample_i+4] = 0
 
-    var dhhu = newSeq[int32](3 * variant.vcf.n_samples)
-    get_or_empty(variant, "DHHU", dhhu, 3)
-    dhhu[3 * sample_i] = 0
-    dhhu[3 * sample_i + 1] = 0
-    dhhu[3 * sample_i + 2] = 0
+  var ci = innerCI(variant)
+  var i = lowerBound(snps.starts, ci.left.int32, system.cmp)
+  var n = 0
+  while snps.starts[i] < ci.right:
+    dhgt[5 * sample_i + snps.nalts[i]] += 1
+    n += 1
+    i += 1
 
-    var ci = innerCI(variant)
-    var i = lowerBound(snps.starts, ci.left.int32, system.cmp)
-    var n = 0
-    while snps.starts[i] < ci.right:
-        # only compare diploid to triploid allele balance if this was called a HET.
-        if snps.nalts[i] == 1:
-          if snps.hetc[i] == 0: # diploid
-              dhet[2 * sample_i] += 1
-          elif snps.hetc[i] == 1: # triploid
-              dhet[2 * sample_i + 1] += 1
+  if n == 0:
+    return
 
-        elif snps.nalts[i] == 0: # hom-ref
-            dhhu[3 * sample_i] += 1
-        elif snps.nalts[i] == 2: # hom-alt
-            dhhu[3 * sample_i + 1] += 1
-        elif snps.nalts[i] == -1: # unknown
-            dhhu[3 * sample_i + 2] += 1
-        i += 1
-        n += 1
-    if n == 0:
-        return
-
-    if variant.format.set("DHET", dhet) != Status.OK:
-        quit "error setting DHET in VCF"
-    if variant.format.set("DHHU", dhhu) != Status.OK:
-        quit "error setting DHHU in VCF"
+  if variant.format.set("DHGT", dhgt) != Status.OK:
+      quit "error setting DHGT in VCF"
 
 proc sample_name(b:Bam): string =
   for line in ($b.hdr).split("\n"):
@@ -575,6 +592,7 @@ Options:
   if $args["--snp"] != "nil" and not open(snps, $args["--snp"], threads=threads):
       quit "couldn't open snp VCF at:" & $args["--snp"]
 
+
   if vcf.header.add_info("GCF", "1", "Float", "GC-content fraction for the variant region betwee 0 and 1.") != Status.OK:
       quit "unable to add to header"
   #if vcf.header.add_format("DHZ", "1", "Float", "duphold z-score for depth") != Status.OK:
@@ -587,11 +605,8 @@ Options:
       quit "unable to add to DHFFC header"
   if vcf.header.add_format("DHSP", "1", "Integer", "duphold count of spanning read-pairs") != Status.OK:
       quit "unable to add DHSP to header"
-
-  if snps != nil and vcf.header.add_format("DHET", "2", "Integer", "duphold count of SNP heterozygotes in the event supporting: a normal heterozygote, a triploid heterozygote") != Status.OK:
-      quit "unable DHET to add to header"
-  if snps != nil and vcf.header.add_format("DHHU", "3", "Integer", "count of hom-ref, hom-alt, unknown SNP variants in the event") != Status.OK:
-      quit "unable DHUU to add to header"
+  if snps != nil and vcf.header.add_format("DHGT", "5", "Integer", "count of hi-quality hom-ref, het, hom-alt, unknown, low-quality SNP variant genotypes in the event") != Status.OK:
+      quit "unable DHGT to add to header"
 
   open(bam, $args["--bam"], index=true, threads=threads, fai=($args["--fasta"]))
   if bam == nil:
@@ -606,6 +621,7 @@ Options:
       sample_i = vcf.samples.find(getEnv("DUPHOLD_SAMPLE_NAME"))
     if sample_i == -1:
       quit "couldn't find sample from bam:" & bam.sample_name & "or ENV in vcf which had:" & join(vcf.samples, ",")
+
   if args["--drop"]:
     vcf.set_samples(@[bam.sample_name])
     sample_i = 0
@@ -613,7 +629,7 @@ Options:
 
   if snps != nil:
     if snps.samples.find(bam.sample_name) == -1:
-      quit "couldn't find sample:" & bam.sample_name & " in snps vcf which had:" & join(snps.samples, ",")
+      quit "[duphold] couldn't find sample:" & bam.sample_name & " in snps vcf which had:" & join(snps.samples, ",")
     snps.set_samples(@[bam.sample_name])
 
   if not ovcf.write_header():
@@ -631,11 +647,12 @@ Options:
       if not ovcf.write_variant(variant):
           quit "couldn't write variant"
 
-  ovcf.close()
   vcf.close()
   bam.close()
   if snps != nil:
     snps.close()
+  ovcf.close()
+  stderr.write_line "[duphold] finished"
 
 when isMainModule:
     main(commandLineParams())
