@@ -441,7 +441,6 @@ proc innerCI(v:Variant): inner {.inline.} =
 type snpset = ref object
   starts: seq[int32]
   nalts: seq[int8] # 0 == HOM-REF, 1 == HET, 2 == HOM-ALT, 3 == UNKNOWN, 4 == Low-Q
-  non_transmission: seq[bool]
 
 template AB(sample_i:int, AD:seq[int32]): float32 =
   var a = AD[2*sample_i+1].float32
@@ -464,58 +463,48 @@ proc hq(sample_i: int, GQ: seq[int32], AD: seq[int32], alts: seq[int8], min_dp=9
     else:
       return false
 
-proc get_order(vcf_samples: seq[string], snp_samples: seq[string]): seq[int] =
-  doAssert vcf_samples.len == snp_samples.len
-  if vcf_samples.len == 0:
-    return @[0]
-  result = newSeq[int](vcf_samples.len)
-  for i, s in snp_samples:
-    result[i] = vcf_samples.find(s)
-    doAssert result[i] != -1
-  # so result[0] will always return the vcf_index of the proband.
-
-proc read(snps:VCF, chrom:string, snp_order: seq[string]): snpset =
+proc read(snps:VCF, chrom:string): snpset =
   ## read all bi-allelic, high-quality snps into the snpset.
   info("starting to read snps for chrom: " & chrom)
 
-  var order = get_order(snps.samples, snp_order)
-  result = snpset(starts:newSeqOfCap[int32](32768), nalts:newSeqOfCap[int8](32768), non_transmission: newSeqOfCap[bool](32768))
+  result = snpset(starts:newSeqOfCap[int32](32768), nalts:newSeqOfCap[int8](32768))
   var ad = newSeq[int32](2)
-  var gt = newSeq[int32](2)
-  var gq = newSeq[int32](2)
+  var gt = newSeq[int32](1)
+  var gq = newSeq[int32](1)
   for snv in snps.query(chrom):
     if len(snv.REF) > 1 or len(snv.ALT) != 1 or len(snv.ALT[0]) != 1 or snv.QUAL < 20: continue
     if snv.FILTER != "PASS": continue
     var alts = snv.format.genotypes(gt).alts
 
     result.starts.add(snv.start.int32)
-    result.non_transmission.add(false)
 
-    var sample_alts = alts[order[0]]
+    var sample_alts = alts[0]
     if sample_alts == -1:
       result.nalts.add(3)
       continue
 
     if snv.format.get("AD", ad) != Status.OK:
       quit "expected AD field in snps VCF"
-    if snv.format.get("GQ", gq) != Status.OK:
+    var st = snv.format.get("GQ", gq)
+    if st == Status.UnexpectedType:
+      var o = cast[seq[float32]](gq)
+      if snv.format.get("GQ", o) != Status.OK:
+        quit "unable to extract GQ field in snps VCF"
+      gq.setLen(o.len)
+      for i, v in o:
+        gq[i] = v.int32
+    else:
       quit "expected GQ field in snps VCF"
 
-    if not hq(order[0], gq, ad, alts):
+    if not hq(0, gq, ad, alts):
       result.nalts.add(4)
     else:
       result.nalts.add(sample_alts)
-      if sample_alts == 0 or sample_alts == 2:
-        for i in 1..order.high:
-          if not hq(order[i], gq, ad, alts): continue
-          if sample_alts + alts[order[i]] == 2:
-            result.non_transmission[result.non_transmission.high] = true
-            break
 
   info("done reading " & $result.starts.len & " bi-allelic snps for chrom: " & chrom)
 
 
-proc annotate*(snps:snpset, variant:Variant, sample_i:int, has_parents: bool) =
+proc annotate*(snps:snpset, variant:Variant, sample_i:int) =
   ## annotate a structural variant with the snps.
   if len(snps.starts) == 0: return
 
@@ -529,20 +518,11 @@ proc annotate*(snps:snpset, variant:Variant, sample_i:int, has_parents: bool) =
   dhgt[5*sample_i+3] = 0
   dhgt[5*sample_i+4] = 0
 
-  var dhnt: seq[int32]
-  if has_parents:
-    dhnt = newSeq[int32](2 * variant.vcf.n_samples)
-    get_or_empty(variant, "DHNT", dhnt, 1)
-    dhnt[sample_i] = 0
-
   var ci = innerCI(variant)
   var i = lowerBound(snps.starts, ci.left.int32, system.cmp)
   var n = 0
   while snps.starts[i] < ci.right:
-    # only compare diploid to triploid allele balance if this was called a HET.
     dhgt[5 * sample_i + snps.nalts[i]] += 1
-    if has_parents:
-      dhnt[sample_i] += snps.non_transmission[i].int32
     n += 1
     i += 1
 
@@ -551,8 +531,6 @@ proc annotate*(snps:snpset, variant:Variant, sample_i:int, has_parents: bool) =
 
   if variant.format.set("DHGT", dhgt) != Status.OK:
       quit "error setting DHGT in VCF"
-  if has_parents and variant.format.set("DHNT", dhnt) != Status.OK:
-      quit "error setting DHNT in VCF"
 
 proc sample_name(b:Bam): string =
   for line in ($b.hdr).split("\n"):
@@ -574,7 +552,6 @@ proc main(argv: seq[string]) =
 Options:
   -v --vcf <path>           path to sorted SV VCF/BCF
   -b --bam <path>           path to indexed BAM/CRAM
-  -p --parent <string>      optional comma-delimited list of parent-id(s) to check for LOH in snp VCF.
   -f --fasta <path>         indexed fasta reference.
   -s --snp <path>           optional path to snp/indel VCF/BCF with which to annotate SVs. BCF is highly recommended as it's much faster to parse.
   -t --threads <int>        number of decompression threads. [default: 4]
@@ -591,7 +568,6 @@ Options:
     ovcf:VCF
     sample_i: int
     snps:VCF
-    parents: seq[string]
 
   if $args["--fasta"] == "nil":
     echo doc
@@ -651,21 +627,10 @@ Options:
     sample_i = 0
   ovcf.header = vcf.header
 
-  var snp_order = @[bam.sample_name]
   if snps != nil:
-    if $args["parents"] != "nil":
-      parents = ($args["parents"]).strip().split(",")
-      if vcf.header.add_format("DHNT", "1", "Integer", "duphold non-transmitted. count of hi-quality non-transmitted alleles in the event indicative of LOH") != Status.OK:
-        quit "unable to add DHNT to header"
-
-
     if snps.samples.find(bam.sample_name) == -1:
       quit "[duphold] couldn't find sample:" & bam.sample_name & " in snps vcf which had:" & join(snps.samples, ",")
-    for parent in parents:
-      if snps.samples.find(parent) == -1:
-        quit "[duphold] " & "couldn't find parent:" & parent & " in snp VCF"
-    snp_order.add(parents)
-    snps.set_samples(snp_order)
+    snps.set_samples(@[bam.sample_name])
 
   if not ovcf.write_header():
       quit "couldn't write vcf header"
@@ -675,18 +640,19 @@ Options:
   for variant in bam.duphold(vcf, fai, sample_i):
       if snps != nil:
           if last_chrom != variant.CHROM:
-            snpst = snps.read($variant.CHROM, snp_order)
+            snpst = snps.read($variant.CHROM)
             last_chrom = variant.CHROM
 
-          snpst.annotate(variant, sample_i, parents.len > 0)
+          snpst.annotate(variant, sample_i)
       if not ovcf.write_variant(variant):
           quit "couldn't write variant"
 
-  ovcf.close()
   vcf.close()
   bam.close()
   if snps != nil:
     snps.close()
+  ovcf.close()
+  stderr.write_line "[duphold] finished"
 
 when isMainModule:
     main(commandLineParams())
