@@ -1,6 +1,8 @@
-v0.1.3 (dev)
-============
+v0.1.3
+======
 + add `DUPHOLD_SAMPLE_NAME` environment variable as a way to set the sample name. (#19)
++ re-vamp SNP stuff so that only DHGT is reported. It is an Integer with 5 columns for numbers of
+  0. hom-ref 1. het 2. hom-alt 3. unknown 4. low-quality snp variants within each event.
 
 v0.1.2
 ======

@@ -473,7 +473,7 @@ proc read(snps:VCF, chrom:string): snpset =
   var gq = newSeq[int32](1)
   for snv in snps.query(chrom):
     if len(snv.REF) > 1 or len(snv.ALT) != 1 or len(snv.ALT[0]) != 1 or snv.QUAL < 20: continue
-    if snv.FILTER != "PASS": continue
+    if snv.FILTER notin ["", ".", "PASS"]: continue
     var alts = snv.format.genotypes(gt).alts
 
     result.starts.add(snv.start.int32)

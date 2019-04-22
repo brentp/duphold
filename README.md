@@ -36,25 +36,20 @@ For genomes/samples with more variable coverage, `DHFFC` should be the most reli
 **NOTE** it is strongly recommended to use BCF for the `--snp` argument as otherwise VCF parsing will be a bottleneck.
 
 + A DEL call with many HETs is unlikely to be valid.
-+ A DUP call that has many HETs that have a 0.5 allele balance is unlikely to be valid.
 
 When the user specifies a `--snp` VCF, `duphold` finds the appropriate sample in that file and extracts high (> 20) quality, bi-allelic
 SNP calls. For each chromosome, it will store a minimal (low-memory representation) in a sorted data-structure for fast access. It will
-then query this data structure for each SV and count the number of heterozygotes supporting a diploid HET (allele balance close to 0.5)
-or a triploid HET (allele balance close to 0.33 or 0.67) into `DHET`. It will store the number of Hom-Ref, Hom-Alt, Unnkown calls in
-`DHHU`.
+then query this data structure for each SV and count the number of hom-refs, heterozygote, hom-alt, unknown, and low-quality snp calls
+in the region of the event. 
+This information is stored in 5 integers in `DHGT`.
 
 When a SNP/Indel VCF/BCF is given, `duphold` will annotate each DEL/DUP call with:
 
-+ **DHET**: counts of SNP heterozygotes in the SV supporting: [0] a normal heterozygote, [1] a triploid heterozygote.
-            for a DUP, we expect most hets to have an allele balance closer to 0.33 or 0.67 than to 0.5. A good heterozygous
-            DUP will have larger values of [1], than [0], though it's possible there are no HETs in small events.
++ **DHGT**: counts of [0] Hom-ref, [1] Het, [2] Homalt, [3] Unknown, [4] low-quality variants in the event.
+  A heterozygous deletion may have more hom-alt SNP calls. A homozygous deletion may have only unknown or
+  low-quality SNP calls.
 
-+ **DHHU**: counts of [0] Hom-ref, [1] Hom-alt, [2] Unknown variants in the event. A heterozygous deletion may have more hom-alt SNP calls.
-            A homozygous deletion may have only unknown SNP calls.
-
-In practice, this has not proven useful for us. The depth changes are more informative.
-
+In practice, this has had limited benefit for us. The depth changes are more informative.
 
 ## Performance
 
