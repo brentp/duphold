@@ -1,3 +1,7 @@
+v0.1.4
+======
++ output DHSP for BND elements on same chrom
+
 v0.1.3
 ======
 + add `DUPHOLD_SAMPLE_NAME` environment variable as a way to set the sample name. (#19)

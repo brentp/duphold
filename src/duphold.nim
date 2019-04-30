@@ -179,22 +179,21 @@ proc get_bnd_mate_pos*(a:string, vchrom:string): int {.inline.} =
 
 proc count(discordants:var seq[Discordant], s:int, e:int, i99:int, slop:int=25): int =
     ## count the number of discordants that span s..e but are within d of both.
-    var ilow = lowerBound(discordants, Discordant(left:uint32(s - i99)), proc(a, b: Discordant):int =
+    var ilow = lowerBound(discordants, Discordant(left:uint32(s - i99), right: uint32(s - i99)), proc(a, b: Discordant):int =
         if a.left == b.left:
             return a.right.int - b.right.int
         return a.left.int - b.left.int
     )
-    if ilow > ilow: ilow -= 1
     for i in ilow..discordants.high:
         var disc = discordants[i]
-        if disc.left.int > s + slop: break
+        if disc.left.int > s + i99: break
         if s - disc.left.int > i99: continue
 
         if disc.right.int - (e - slop) < i99:
           # after correcting for the event, the insert should fall in the expected distribution.
           #echo &"s-e:{s}-{e} supported by: {disc} with corrected span: {(disc.right.int - disc.left.int) - (e - s)}"
           var corrected = (disc.right.int - disc.left.int) - (e - s)
-          if corrected < i99 and corrected > -2*slop:
+          if corrected < 2 * i99 and corrected > -2*slop:
             result += 1
 
 proc get_bnd_mate_pos(variant:Variant): int {.inline.} =
@@ -207,6 +206,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
       e = variant.stop
 
     var bnd = get_bnd_mate_pos(variant)
+    var isBnd = false
     if bnd != -1:
       if bnd < s and s - bnd < 20000000:
           e = s
@@ -214,6 +214,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
       elif bnd > e and bnd - e < 20000000:
           s = e
           e = bnd - 1
+      isBnd = true
 
     if bnd == -1:
         # skip distant BND's as this is not informative
@@ -275,7 +276,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
 
     if discordants.len == 0: return
 
-    if variant.ALT[0] == "<DEL>" or (variant.ALT[0] != "<" and len(variant.REF) > len(variant.ALT[0])):
+    if isBnd or variant.ALT[0] == "<DEL>" or (variant.ALT[0] != "<" and len(variant.REF) > len(variant.ALT[0])):
       var ints = newSeq[int32](variant.vcf.n_samples)
       get_or_empty(variant, "DHSP", ints)
       ints[sample_i] = discordants.count(s, e, i99).int32
@@ -369,7 +370,7 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       if aln.tid != aln.mate_tid: return
       #var cig = aln.cigar
       #if cig[cig.len-1].op != CigarOp(soft_clip):
-      discs.add(Discordant(left:aln.stop.uint32, right: aln.mate_pos.uint32))
+      discs.add(Discordant(left:stop.uint32, right: aln.mate_pos.uint32))
       #else:
       #  discs.add(Discordant(left:(aln.stop.uint32 + cig[cig.len-1].len.uint32), right: aln.mate_pos.uint32))
 
