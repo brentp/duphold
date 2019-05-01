@@ -494,7 +494,7 @@ proc read(snps:VCF, chrom:string): snpset =
       gq.setLen(o.len)
       for i, v in o:
         gq[i] = v.int32
-    else:
+    elif st != Status.OK:
       quit "expected GQ field in snps VCF"
 
     if not hq(0, gq, ad, alts):

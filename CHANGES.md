@@ -1,6 +1,7 @@
 v0.1.4
 ======
 + output DHSP for BND elements on same chrom
++ fix for #22: allow GQ of type Integer or Float
 
 v0.1.3
 ======

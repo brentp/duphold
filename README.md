@@ -23,7 +23,7 @@ It also adds **GCF** to the INFO field indicating the fraction of G or C bases i
 After annotating with `duphold`, a sensible way to filter to high-quality variants is:
 
 ```
-bcftools view -i '(SVTYPE = "DEL" & FMT/DHFFC[0] < 0.7) | (SVTYPE = "DUP" & FMT/DHBFC[0] > 1.3)" $svvcf
+bcftools view -i '(SVTYPE = "DEL" & FMT/DHFFC[0] < 0.7) | (SVTYPE = "DUP" & FMT/DHBFC[0] > 1.3)' $svvcf
 
 ```
 
