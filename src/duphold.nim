@@ -199,7 +199,7 @@ proc count(discordants:var seq[Discordant], s:int, e:int, i99:int, slop:int=25):
 proc get_bnd_mate_pos(variant:Variant): int {.inline.} =
     return get_bnd_mate_pos(variant.ALT[0], $variant.CHROM)
 
-proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var MedianStats, gc_stats:var seq[MedianStats], gc_bool:var seq[bool], w:int=7, discordants:var seq[Discordant], i99:int): float64 =
+proc duphold*[T](variant:Variant, values:var seq[T], frag_norm: var seq[int16], sample_i: int, stats:var MedianStats, gc_stats:var seq[MedianStats], gc_bool:var seq[bool], w:int=7, discordants:var seq[Discordant], i99:int): float64 =
     ## sets FORMAT fields for sample i in the variant and returns the DHBFC value
     var
       s = variant.start
@@ -227,6 +227,9 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
     if s > e:
       stderr.write_line "weird variant:", $variant
 
+    var ss: string
+    var is_del = (variant.info.get("SVTYPE", ss) == Status.OK and ss == "DEL") and e - s < 20_000
+
     var gc = count_gc(gc_bool, s, e)
     var gci = ((GC_BINS - 1) * gc).int
     var gc_stat = gc_stats[gci]
@@ -235,7 +238,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
 
     var local_stats = MedianStats()
     for i in (s+1)..e:
-        local_stats.add(values[i])
+      local_stats.add(if is_del: frag_norm[i] else: values[i])
 
     # look left and right up to $size bases.
     # also offset by `off` bases to avoid sketchiness near event bounds.
@@ -244,9 +247,9 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
       off = 20
       size = SIZE
     for i in max(0, s - size - off)..(s - off):
-      flank_stats.add(values[i])
+      flank_stats.add(if is_del: frag_norm[i] else: values[i])
     for i in (e + off)..min(e + size + off, values.high):
-      flank_stats.add(values[i])
+      flank_stats.add(if is_del: frag_norm[i] else: values[i])
 
     var tmp = @[gc]
     if variant.info.set("GCF", tmp) != Status.OK:
@@ -323,6 +326,25 @@ proc get_isize_distribution*(bam:Bam, n:int=5_000_000, skip=1_500_000): MedianSt
         if result.n == n:
             return
 
+proc mean[T: float32|int16](vals: var seq[T]): float32 =
+  var s:float64
+  for v in vals:
+    s += v.float64
+  s = s / vals.len.float64
+  return s.float32
+
+
+proc frag_normalize(depths: var seq[int16], frag_depths: var seq[int16]): seq[int16] =
+  var tmp = newSeq[float32](depths.len)
+  var fm = mean(depths)
+  for i, d in depths:
+    tmp[i] = d.float32 / frag_depths[i].float32
+  var m = mean(tmp)
+
+  result = newSeq[int16](depths.len)
+  for i, v in tmp:
+    result[i] = int16(v / m * fm)
+
 iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Variant =
   var
       targets = bam.hdr.targets
@@ -342,6 +364,8 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
   # support the deletion.
   var i99 = id.percentile(99)
   var discs = newSeqOfCap[Discordant](16384)
+
+
 
   proc ifun(aln:Record, posns: var seq[mrange]) =
       if aln.mapping_quality == 0:
@@ -374,12 +398,29 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
       #else:
       #  discs.add(Discordant(left:(aln.stop.uint32 + cig[cig.len-1].len.uint32), right: aln.mate_pos.uint32))
 
+  proc fragment_coverage(aln:Record, posns:var seq[mrange]) =
+    ## if true proper pair, then increment the entire fragment. otherwise, increment
+    ## the start and end of each read separately.
+    #if aln.mapping_quality < 5: return
+    if aln.tid != aln.mate_tid or aln.flag.unmapped or aln.flag.dup or aln.flag.qcfail or aln.flag.secondary or aln.flag.supplementary:
+      return
+
+
+    if aln.isize < 0: return
+    if aln.isize == 0 and aln.flag.read1: return
+    if aln.isize.abs > 20_000: return
+
+    posns.add((aln.start, aln.start + aln.isize, 1))
+
   var depths : Fun[int16] = Fun[int16](f:ifun)
+  var frag_depths : Fun[int16] = Fun[int16](f:fragment_coverage)
   var gc_bool: seq[bool]
+
+  var frag_norm: seq[int16]
 
   for variant in vcf:
       if variant.CHROM == last_chrom:
-          discard variant.duphold(depths.values, sample_i, stats, gc_stats, gc_bool, w=w, discordants=discs, i99=i99)
+          discard variant.duphold(depths.values, frag_norm, sample_i, stats, gc_stats, gc_bool, w=w, discordants=discs, i99=i99)
 
           yield variant
           continue
@@ -400,13 +441,15 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
 
       target = targets[i]
       depths.values.setLen(target.length.int + 1)
+      frag_depths.values.setLen(target.length.int + 1)
       zeroMem(depths.values[0].addr, depths.values.len * depths.values[0].sizeof)
+      zeroMem(frag_depths.values[0].addr, frag_depths.values.len * frag_depths.values[0].sizeof)
       gc_bool.setLen(target.length.int)
       zeroMem(gc_bool[0].addr, gc_bool.len * gc_bool[0].sizeof)
       discs.setLen(0)
       GC_fullCollect()
 
-      discard genoiser[int16](bam, @[depths], target.name, 0, target.length.int)
+      discard genoiser[int16](bam, @[depths, frag_depths], target.name, 0, target.length.int)
 
       gc_count = fai.gc_content(last_chrom, step, gc_bool)
       depths.values.fill_stats(stats, gc_stats, gc_count, step, target.length.int)
@@ -416,8 +459,9 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
               return a.right.int - b.right.int
           return a.left.int - b.left.int
       )
+      frag_norm = frag_normalize(depths.values, frag_depths.values)
 
-      discard variant.duphold(depths.values, sample_i, stats, gc_stats, gc_bool, w=w, discordants=discs, i99=i99)
+      discard variant.duphold(depths.values, frag_norm, sample_i, stats, gc_stats, gc_bool, w=w, discordants=discs, i99=i99)
       yield variant
 
 type inner = tuple[left: int, right:int]
