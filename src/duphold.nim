@@ -338,8 +338,9 @@ proc frag_normalize(depths: var seq[int16], frag_depths: var seq[int16]): seq[in
   var tmp = newSeq[float32](depths.len)
   var fm = mean(depths)
   for i, d in depths:
-    tmp[i] = d.float32 / frag_depths[i].float32
+    tmp[i] = d.float32 / max(1, frag_depths[i]).float32
   var m = mean(tmp)
+  stderr.write_line &"[duphold] fm: {fm} m: {m}"
 
   result = newSeq[int16](depths.len)
   for i, v in tmp:
@@ -409,6 +410,7 @@ iterator duphold*(bam:Bam, vcf:VCF, fai:Fai, sample_i:int, step:int=STEP): Varia
     if aln.isize < 0: return
     if aln.isize == 0 and aln.flag.read1: return
     if aln.isize.abs > 20_000: return
+    if aln.mapping_quality < 2: return
 
     posns.add((aln.start, aln.start + aln.isize, 1))
 
