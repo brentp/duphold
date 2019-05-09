@@ -621,7 +621,7 @@ Options:
       stderr.write_line "[duphold] " & "trying sample name from env:" & getEnv("DUPHOLD_SAMPLE_NAME")
       sample_i = vcf.samples.find(getEnv("DUPHOLD_SAMPLE_NAME"))
     if sample_i == -1:
-      quit "couldn't find sample from bam:" & bam.sample_name & "or ENV in vcf which had:" & join(vcf.samples, ",")
+      quit "couldn't find sample from bam:" & bam.sample_name & " or ENV in vcf which had:" & join(vcf.samples, ",")
 
   if args["--drop"]:
     vcf.set_samples(@[bam.sample_name])
