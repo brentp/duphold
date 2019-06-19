@@ -2,6 +2,8 @@
 
 # duphold: uphold your DUP and DEL calls
 
+The paper describing `duphold` is available [here](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6479422/)
+
 SV callers like [lumpy](https://github.com/arq5x/lumpy) look at split-reads and pair distances to find structural variants.
 This tool is a fast way to add depth information to those calls. This can be used as additional
 information for filtering variants; for example **we will be skeptical of deletion calls that
