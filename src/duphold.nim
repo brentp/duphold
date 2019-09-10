@@ -204,21 +204,24 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
     var
       s = variant.start
       e = variant.stop
+      isBnd = false
 
-    var bnd = get_bnd_mate_pos(variant)
-    var isBnd = false
-    if bnd != -1:
-      if bnd < s and s - bnd < 20000000:
-          e = s
-          s = bnd
-      elif bnd > e and bnd - e < 20000000:
-          s = e
-          e = bnd - 1
-      isBnd = true
 
-    if bnd == -1:
-        # skip distant BND's as this is not informative
-        if ':' in variant.ALT[0]: return -1
+    if variant.ALT[0][0] != '<':
+      var bnd = get_bnd_mate_pos(variant)
+      var isBnd = false
+      if bnd != -1:
+        if bnd < s and s - bnd < 20000000:
+            e = s
+            s = bnd
+        elif bnd > e and bnd - e < 20000000:
+            s = e
+            e = bnd - 1
+        isBnd = true
+
+      if bnd == -1:
+          # skip distant BND's as this is not informative
+          if ':' in variant.ALT[0]: return -1
 
     if e - s < 10:
       s = max(0, s - 50)
@@ -276,7 +279,7 @@ proc duphold*[T](variant:Variant, values:var seq[T], sample_i: int, stats:var Me
 
     if discordants.len == 0: return
 
-    if isBnd or variant.ALT[0] == "<DEL>" or (variant.ALT[0] != "<" and len(variant.REF) > len(variant.ALT[0])):
+    if isBnd or variant.ALT[0].startswith("<DEL") or (variant.ALT[0] != "<" and len(variant.REF) > len(variant.ALT[0])):
       var ints = newSeq[int32](variant.vcf.n_samples)
       get_or_empty(variant, "DHSP", ints)
       ints[sample_i] = discordants.count(s, e, i99).int32

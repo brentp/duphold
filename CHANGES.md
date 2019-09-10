@@ -1,3 +1,8 @@
+v0.1.5
+======
++ support for more ALT types (e.g DUP:TANDEM, DEL:ME, etc)
++ flush stdout properly (#25)
+
 v0.1.4
 ======
 + output DHSP for BND elements on same chrom
