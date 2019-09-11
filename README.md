@@ -1,5 +1,8 @@
 [![Build Status](https://travis-ci.org/brentp/duphold.svg?branch=master)](https://travis-ci.org/brentp/duphold)
 
+[![Actions Status](https://github.com/brentp/duphold/workflows/Docker%20Image%20CI/badge.svg)](https://github.com/brentp/duphold/actions)
+
+
 # duphold: uphold your DUP and DEL calls
 
 The paper describing `duphold` is available [here](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6479422/)
