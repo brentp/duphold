@@ -27,10 +27,19 @@ tabix HG002_SVs_Tier1_v0.6.DUP.vcf.gz
 
 DONE
 
-#docker run -v "$(pwd):/work" -v $(pwd)/src:/src/ -v $(dirname $CRAM):$(dirname $CRAM) -v $(dirname $ref):$(dirname $ref) brentp/smoove:v0.2.3 smoove call -d -F --genotype -o lf-dev2/ -x -p 5 -f $ref -n HG002 $CRAM
+set -euo pipefail
 
-bcftools view -i 'SVTYPE="DEL"' lf-dev2/HG002-smoove.genotyped.vcf.gz -O z -o lf-dev2/HG002-smoove.genotyped.DEL.vcf.gz
-tabix lf-dev2/HG002-smoove.genotyped.DEL.vcf.gz
+ODIR=lf-dev-docker
+#docker run -v "$(pwd):/work" -v $(pwd)/src:/src/ -v $(dirname $CRAM):$(dirname $CRAM) -v $(dirname $ref):$(dirname $ref) brentp/smoove:v0.2.3 smoove call -F -d --genotype -o $ODIR/ -x -p 1 -f $ref -n HG002 $CRAM
+
+
+ODIR=smoove-dev
+rm -rf $ODIR
+mkdir -p $ODIR
+smoove call -d --genotype -o $ODIR/ -x -p 1 -f $ref -n HG002 $CRAM
+
+bcftools view -i 'SVTYPE="DEL"' $ODIR/HG002-smoove.genotyped.vcf.gz -O z -o $ODIR/HG002-smoove.genotyped.DEL.vcf.gz
+tabix $ODIR/HG002-smoove.genotyped.DEL.vcf.gz
 
 ev=DEL
 filt="< 0.7"
@@ -44,19 +53,19 @@ sizemin=300
 bed=/data/human/HG002_SVs_Tier1_v0.6.bed
 
 
-python ~/src/truvari/truvari.py --sizemax $sizemax -s $sizemin -S $((sizemin - 30)) -b $truth_del -c lf-dev2/HG002-smoove.genotyped.$ev.vcf.gz -o $eval/unfiltered/ --passonly --pctsim=0  -r 20 --giabreport -f $ref --no-ref --includebed $bed -O 0.6
+python ~/src/truvari/truvari.py --sizemax $sizemax -s $sizemin -S $((sizemin - 30)) -b $truth_del -c $ODIR/HG002-smoove.genotyped.$ev.vcf.gz -o $eval/unfiltered/ --passonly --pctsim=0  -r 20 --giabreport -f $ref --no-ref --includebed $bed -O 0.6
 
-bcftools view -i "(FMT/DHBFC[0] $filt)" lf-dev2/HG002-smoove.genotyped.$ev.vcf.gz -O z -o lf-dev2/HG002-smoove.genotyped.$ev.duphold-DHBFC.vcf.gz
-tabix lf-dev2/HG002-smoove.genotyped.$ev.duphold-DHBFC.vcf.gz
-python ~/src/truvari/truvari.py --sizemax $sizemax -s $sizemin -S $((sizemin - 30)) -b $truth_del -c lf-dev2/HG002-smoove.genotyped.$ev.duphold-DHBFC.vcf.gz -o $eval/dhbfc/ --passonly --pctsim=0  -r 20 --giabreport -f $ref --no-ref --includebed $bed -O 0.6
+bcftools view -i "(FMT/DHBFC[0] $filt)" $ODIR/HG002-smoove.genotyped.$ev.vcf.gz -O z -o $ODIR/HG002-smoove.genotyped.$ev.duphold-DHBFC.vcf.gz
+tabix $ODIR/HG002-smoove.genotyped.$ev.duphold-DHBFC.vcf.gz
+python ~/src/truvari/truvari.py --sizemax $sizemax -s $sizemin -S $((sizemin - 30)) -b $truth_del -c $ODIR/HG002-smoove.genotyped.$ev.duphold-DHBFC.vcf.gz -o $eval/dhbfc/ --passonly --pctsim=0  -r 20 --giabreport -f $ref --no-ref --includebed $bed -O 0.6
 
-bcftools view -i "(FMT/DHFFC[0] $filt)" lf-dev2/HG002-smoove.genotyped.$ev.vcf.gz -O z -o lf-dev2/HG002-smoove.genotyped.$ev.duphold-DHFFC.vcf.gz
-tabix lf-dev2/HG002-smoove.genotyped.$ev.duphold-DHFFC.vcf.gz
-python ~/src/truvari/truvari.py --sizemax $sizemax -s $sizemin -S $((sizemin - 30)) -b $truth_del -c lf-dev2/HG002-smoove.genotyped.$ev.duphold-DHFFC.vcf.gz -o $eval/dhffc/ --passonly --pctsim=0  -r 20 --giabreport -f $ref --no-ref --includebed $bed -O 0.6
+bcftools view -i "(FMT/DHFFC[0] $filt)" $ODIR/HG002-smoove.genotyped.$ev.vcf.gz -O z -o $ODIR/HG002-smoove.genotyped.$ev.duphold-DHFFC.vcf.gz
+tabix $ODIR/HG002-smoove.genotyped.$ev.duphold-DHFFC.vcf.gz
+python ~/src/truvari/truvari.py --sizemax $sizemax -s $sizemin -S $((sizemin - 30)) -b $truth_del -c $ODIR/HG002-smoove.genotyped.$ev.duphold-DHFFC.vcf.gz -o $eval/dhffc/ --passonly --pctsim=0  -r 20 --giabreport -f $ref --no-ref --includebed $bed -O 0.6
 
-bcftools view -i "(FMT/DHFC[0] $filt)" lf-dev2/HG002-smoove.genotyped.$ev.vcf.gz -O z -o lf-dev2/HG002-smoove.genotyped.$ev.duphold-DHFC.vcf.gz
-tabix lf-dev2/HG002-smoove.genotyped.$ev.duphold-DHFC.vcf.gz
-python ~/src/truvari/truvari.py --sizemax $sizemax -s $sizemin -S $((sizemin - 30)) -b $truth_del -c lf-dev2/HG002-smoove.genotyped.$ev.duphold-DHFC.vcf.gz -o $eval/dhfc/ --passonly --pctsim=0  -r 20 --giabreport -f $ref --no-ref --includebed $bed -O 0.6
+bcftools view -i "(FMT/DHFC[0] $filt)" $ODIR/HG002-smoove.genotyped.$ev.vcf.gz -O z -o $ODIR/HG002-smoove.genotyped.$ev.duphold-DHFC.vcf.gz
+tabix $ODIR/HG002-smoove.genotyped.$ev.duphold-DHFC.vcf.gz
+python ~/src/truvari/truvari.py --sizemax $sizemax -s $sizemin -S $((sizemin - 30)) -b $truth_del -c $ODIR/HG002-smoove.genotyped.$ev.duphold-DHFC.vcf.gz -o $eval/dhfc/ --passonly --pctsim=0  -r 20 --giabreport -f $ref --no-ref --includebed $bed -O 0.6
 
 python paper/table1.py eval-DEL/{unfiltered,dhfc,dhbfc,dhffc}/summary.txt
 exit
@@ -70,11 +79,11 @@ rm -rf ~/public_html/samplot-tp/
 ~/src/samplot/src/samplot_vcf.sh -O pdf -o ~/public_html/samplot-tp/ -v $eval/dhffc/tp-call.vcf -r $ref -S ~/src/samplot/src/samplot.py $CRAM
 
 eval=missed
-bcftools view -i '(FMT/DHFFC[0] > 0.85)' lf-dev2/HG002-smoove.genotyped.DEL.vcf.gz -O z -o lf-dev2/HG002-smoove.genotyped.DEL.duphold-no-support.vcf.gz
-tabix lf-dev2/HG002-smoove.genotyped.DEL.duphold-no-support.vcf.gz
+bcftools view -i '(FMT/DHFFC[0] > 0.85)' $ODIR/HG002-smoove.genotyped.DEL.vcf.gz -O z -o $ODIR/HG002-smoove.genotyped.DEL.duphold-no-support.vcf.gz
+tabix $ODIR/HG002-smoove.genotyped.DEL.duphold-no-support.vcf.gz
 rm -rf $eval-no-support
 python ~/src/truvari/truvari.py --sizemax $sizemax -s $sizemin -S $((sizemin - 30)) -b $truth_del -c \
-	lf-dev2/HG002-smoove.genotyped.DEL.duphold-no-support.vcf.gz -o $eval-no-support --passonly --pctsim=0 \
+	$ODIR/HG002-smoove.genotyped.DEL.duphold-no-support.vcf.gz -o $eval-no-support --passonly --pctsim=0 \
    	-r 20 --giabreport -f $ref --no-ref \
 	--includebed $bed -O 0.95
 
