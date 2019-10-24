@@ -179,11 +179,15 @@ proc get_bnd_mate_pos*(a:string, vchrom:string): int {.inline.} =
 
 proc count(discordants:var seq[Discordant], s:int, e:int, i99:int, slop:int=25): int =
     ## count the number of discordants that span s..e but are within d of both.
-    var ilow = lowerBound(discordants, Discordant(left:uint32(s - i99), right: uint32(s - i99)), proc(a, b: Discordant):int =
+    var ilow: int
+    if s <= i99:
+      ilow = 1
+    else:
+      ilow = lowerBound(discordants, Discordant(left:uint32(s - i99), right: uint32(s - i99)), proc(a, b: Discordant):int =
         if a.left == b.left:
             return a.right.int - b.right.int
         return a.left.int - b.left.int
-    )
+      )
     for i in ilow..discordants.high:
         var disc = discordants[i]
         if disc.left.int > s + i99: break
