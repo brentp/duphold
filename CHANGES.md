@@ -1,5 +1,5 @@
-v0.2.1 (dev)
-============
+v0.2.1
+======
 + fix for start of SV less than 99th percentile of insert size distribution (#28, #29, thanks @roryk)
 
 v0.1.5
