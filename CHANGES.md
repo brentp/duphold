@@ -1,3 +1,7 @@
+v0.2.1 (dev)
+============
++ fix for start of SV less than 99th percentile of insert size distribution (#28, #29, thanks @roryk)
+
 v0.1.5
 ======
 + support for more ALT types (e.g DUP:TANDEM, DEL:ME, etc)
