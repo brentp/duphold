@@ -96,7 +96,7 @@ The `truvari.py` command used for this is the same as above except for: `-s 1000
 
 ## Install
 
-`duphold` is distributed as a binary [here](https://github.com/brentp/duphold/releases/latest) and requires libhts.so in standard locations or indicated with `LD_LIBRARY_PATH`.
+`duphold` is distributed as a static binary [here](https://github.com/brentp/duphold/releases/latest).
 
 
 
