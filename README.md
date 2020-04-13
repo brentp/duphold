@@ -112,7 +112,7 @@ the threads are decompression threads so increasing up to about 4 works.
 
 Full usage is available with `duphold -h`
 
-`duphold runs on a single-sample, but you can install [smoove](https://github.com/brentp/smoove) and run `smoove duphold`
+`duphold` runs on a single-sample, but you can install [smoove](https://github.com/brentp/smoove) and run `smoove duphold`
 to parallelize across many samples.
 
 ## Examples
