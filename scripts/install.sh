@@ -21,7 +21,7 @@ nimble refresh
 $base/nim-$BRANCH/bin/nimble install -y
 
 git clone --recursive https://github.com/samtools/htslib.git
-cd htslib && git checkout 1.9 && autoheader && autoconf && ./configure --enable-libcurl
+cd htslib && git checkout 1.10.2 && autoheader && autoconf && ./configure --enable-libcurl
 cd $base
 make -j 4 -C htslib
 
