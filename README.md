@@ -43,10 +43,8 @@ For genomes/samples with more variable coverage, `DHFFC` should be the most reli
 + A DEL call with many HETs is unlikely to be valid.
 
 When the user specifies a `--snp` VCF, `duphold` finds the appropriate sample in that file and extracts high (> 20) quality, bi-allelic
-SNP calls. For each chromosome, it will store a minimal (low-memory representation) in a sorted data-structure for fast access. It will
-then query this data structure for each SV and count the number of hom-refs, heterozygote, hom-alt, unknown, and low-quality snp calls
-in the region of the event. 
-This information is stored in 5 integers in `DHGT`.
+SNP calls  and for each SV, it reports the number of hom-refs, heterozygote, hom-alt, unknown, and low-quality snp calls
+in the region of the event. This information is stored in 5 integers in `DHGT`.
 
 When a SNP/Indel VCF/BCF is given, `duphold` will annotate each DEL/DUP call with:
 
@@ -113,6 +111,9 @@ the snp/indel file contains many (>20 or so) samples.
 the threads are decompression threads so increasing up to about 4 works.
 
 Full usage is available with `duphold -h`
+
+`duphold runs on a single-sample, but you can install [smoove](https://github.com/brentp/smoove) and run `smoove duphold`
+to parallelize across many samples.
 
 ## Examples
 
