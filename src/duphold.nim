@@ -603,7 +603,7 @@ Options:
       quit "couldn't open snp VCF at:" & $args["--snp"]
 
 
-  if vcf.header.add_info("GCF", "1", "Float", "GC-content fraction for the variant region betwee 0 and 1.") != Status.OK:
+  if vcf.header.add_info("GCF", "1", "Float", "GC-content fraction for the variant region between 0 and 1.") != Status.OK:
       quit "unable to add to header"
   #if vcf.header.add_format("DHZ", "1", "Float", "duphold z-score for depth") != Status.OK:
   #    quit "unable to add to header"
