@@ -519,7 +519,9 @@ proc annotate*(snps:snpset, variant:Variant, sample_i:int) =
   if len(snps.starts) == 0: return
 
   # dont annotate BNDs (or INVs)
-  if ':' in variant.ALT[0] or variant.ALT[0] == "<INV>": return
+  var alt = variant.ALT[0]
+  if (':' in alt and ('[' in alt or ']' in alt)) or alt == "<INV>": return
+
   var dhgt = newSeq[int32](5 * variant.vcf.n_samples)
   get_or_empty(variant, "DHGT", dhgt, 5)
   dhgt[5*sample_i] = 0
