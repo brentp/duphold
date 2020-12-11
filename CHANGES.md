@@ -1,3 +1,8 @@
+v0.2.2
+======
++ update for newer htslib
++ better support for manta (and likely other callers) (#38 thanks to @am8265 for reporting)
+
 v0.2.1
 ======
 + fix for start of SV less than 99th percentile of insert size distribution (#28, #29, thanks @roryk)
