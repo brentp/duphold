@@ -1,3 +1,7 @@
+v0.2.3 (dev)
+======
++ for snps add 0's to DHGT if none overlap
+
 v0.2.2
 ======
 + update for newer htslib

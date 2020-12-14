@@ -532,14 +532,9 @@ proc annotate*(snps:snpset, variant:Variant, sample_i:int) =
 
   var ci = innerCI(variant)
   var i = lowerBound(snps.starts, ci.left.int32, system.cmp)
-  var n = 0
   while i < snps.starts.len and snps.starts[i] < ci.right:
     dhgt[5 * sample_i + snps.nalts[i]] += 1
-    n += 1
     i += 1
-
-  if n == 0:
-    return
 
   if variant.format.set("DHGT", dhgt) != Status.OK:
       quit "error setting DHGT in VCF"
